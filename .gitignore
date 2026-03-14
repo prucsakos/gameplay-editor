@@ -1,0 +1,15 @@
+# Whisper models (downloaded to ~/.cache/whisper/ by openai-whisper)
+# Legacy models/ directory if ever used locally
+models/
+
+# Temp files
+*.wav
+*.tmp
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.pyc
