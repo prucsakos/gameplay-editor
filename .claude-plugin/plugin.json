@@ -3,9 +3,9 @@
   "description": "Transform long gameplay recordings into highlight reels and short-form clips using AI-powered audio analysis",
   "version": "1.0.0",
   "author": {
-    "name": "prucs"
+    "name": "prucsakos"
   },
-  "repository": "https://github.com/prucs/gameplay-editor",
+  "repository": "https://github.com/prucsakos/gameplay-editor",
   "license": "MIT",
   "keywords": ["video", "editing", "gameplay", "highlights", "ffmpeg", "whisper"]
 }

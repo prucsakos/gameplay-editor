@@ -1,0 +1,17 @@
+{
+  "name": "prucsakos",
+  "owner": {
+    "name": "prucsakos"
+  },
+  "plugins": [
+    {
+      "name": "gameplay-editor",
+      "description": "Transform long gameplay recordings into highlight reels and short-form clips using AI-powered audio analysis",
+      "version": "1.0.0",
+      "source": {
+        "source": "github",
+        "repo": "prucsakos/gameplay-editor"
+      }
+    }
+  ]
+}
