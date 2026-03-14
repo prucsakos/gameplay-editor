@@ -15,11 +15,9 @@ You analyze gameplay video audio and visuals to find the most exciting moments �
 You receive:
 - **video_path**: path to the source video file
 - **language**: Whisper language code (default: `hu`)
-- **style**: `clean` or `funny`
-- **target_duration**: target highlight duration (e.g., `300` seconds for 5m)
 - **tmp_dir**: temp directory for intermediate files
 
-Your job is to run the analysis pipeline and return a structured moment list with optional funny edit suggestions.
+Your job is to run the analysis pipeline and return a structured, scored moment list.
 
 ## Stage 1: Track Detection
 
@@ -56,17 +54,38 @@ If available:
    ffmpeg -i "<video_path>" -map 0:a:<voice_index> -ac 1 -ar 16000 -y "<tmp_dir>/voice.wav"
    ```
 
-2. Run Whisper with the specified language:
+2. Run Whisper with the specified language. **Important:** Set `PYTHONIOENCODING=utf-8` to ensure correct character encoding for languages with non-ASCII characters (e.g., Hungarian á, é, ő, ű):
    ```bash
    START_WHISPER=$(date +%s%N)
-   whisper "<tmp_dir>/voice.wav" --model small --language <language> --output_format all --output_dir "<tmp_dir>/"
+   PYTHONIOENCODING=utf-8 whisper "<tmp_dir>/voice.wav" --model small --language <language> --output_format all --output_dir "<tmp_dir>/"
    END_WHISPER=$(date +%s%N)
    WHISPER_MS=$(( (END_WHISPER - START_WHISPER) / 1000000 ))
    ```
    This produces `voice.srt`, `voice.json`, `voice.txt`.
 
-3. Parse `voice.srt` for segment-level timestamps and text.
-4. Parse `voice.json` for word-level timing (needed for captions and word counter).
+3. **Verify encoding:** Check that the output files are valid UTF-8:
+   ```bash
+   python3 -c "open('<tmp_dir>/voice.srt', encoding='utf-8').read()" 2>&1
+   ```
+   If this fails, the files may be in a different encoding (e.g., latin-1 on Windows). Convert them:
+   ```bash
+   python3 -c "
+   import codecs, sys
+   for ext in ['srt', 'txt', 'json']:
+       path = '<tmp_dir>/voice.' + ext
+       try:
+           with open(path, 'r', encoding='utf-8') as f: f.read()
+       except UnicodeDecodeError:
+           with open(path, 'r', encoding='latin-1') as f: content = f.read()
+           with open(path, 'w', encoding='utf-8') as f: f.write(content)
+           print(f'Converted {path} from latin-1 to utf-8')
+   "
+   ```
+
+4. Parse `voice.srt` for segment-level timestamps and text.
+5. Parse `voice.json` for word-level timing (needed for captions).
+
+**When reading Whisper output files**, always open them with explicit `encoding='utf-8'`. On Windows, the default encoding may not be UTF-8.
 
 If Whisper is not available, skip this stage and note: `"Whisper unavailable, using Minimal tier."`
 
@@ -139,6 +158,17 @@ ffmpeg -i "<video_path>" -map 0:a:<voice_index> -af "silencedetect=noise=-35dB:d
 ```
 Parse `silence_start` and `silence_end` timestamps.
 
+### Session Noise Floor Measurement
+
+Use the longest detected silence period (≥3s) to measure the true noise floor for the edit-assembler's noise reduction:
+```bash
+ffmpeg -i "<video_path>" -ss <longest_silence_start> -t <longest_silence_duration> \
+  -map 0:a:<voice_index> -af "astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level:file=<tmp_dir>/noise_floor.txt" -f null - 2>&1
+```
+Parse the average RMS level — this is the session-wide `noise_floor_db`. Include it in the output JSON so the edit-assembler can use it instead of guessing from segment starts.
+
+If no silence ≥3s is found, fall back to the first 30 seconds of the video and take the minimum RMS value.
+
 ### Drama Detection
 
 For each silence period ≥3s, analyze the 5-second window immediately after silence ends:
@@ -183,42 +213,19 @@ SCORING_MS=$(( (END_SCORING - START_SCORING) / 1000000 ))
 
 Report timing: `"scoring_ms": <SCORING_MS>`
 
-### Threshold and Selection
+### Normalization
 
 1. Normalize all window scores to 0-100 (max window = 100)
 2. Compute mean and stddev of scores
-3. Threshold = mean + 1.0 * stddev
-4. If fewer than `target_duration * 1.5` seconds of moments: lower to mean + 0.5 * stddev
-5. If more than `target_duration * 3` seconds: raise to mean + 1.5 * stddev
-6. If still nothing after 3 threshold reductions: report "No significant moments detected"
+3. Report session_mean and session_stddev in the output
 
 ### Merging and Padding
 
-- Adjacent windows (within 10s) above threshold merge into one continuous segment
+Return ALL detected moments (not just above a threshold). The calling command handles filtering.
+
+- Adjacent windows (within 10s) that both score above `mean` merge into one continuous segment
 - Add 2s lead-in and 1s lead-out to each segment (no overlap with neighbors)
-- Variety rule: max 3 segments from any 15-minute source stretch, unless score > mean + 2.5 * stddev
-
-## Stage 5: Word Frequency Detection
-
-Only if Whisper transcript is available:
-
-1. Read the full transcript from `<tmp_dir>/voice.txt`
-2. Tokenize into words (case-insensitive, split on whitespace and punctuation)
-3. Count occurrences of each word, skipping words ≤3 characters
-4. If any word appears 10+ times, include it in the output as a `word_frequency_alerts` list
-
-## Stage 6: Funny Edit Suggestions (style=funny only)
-
-Only if `style == "funny"`:
-
-For each selected moment, analyze the transcript and audio signals to suggest edits:
-
-- **Text pop-up**: If the moment's transcript contains exclamations, ALL CAPS words (3+ chars), or repeated letters, suggest overlaying the most dramatic phrase as big bold text. Include the exact text and timestamp.
-- **Sound effect**: If the moment has a high drama score (silence→explosion pattern) or shows a fail pattern (sudden silence after chaos), suggest an SFX. Pick the most contextually appropriate sound from the available library (bundled `assets/sfx/` + user `sfx/` directory if it exists). Use your judgment for SFX selection — this is an intentional AI judgment call.
-- **Slow-mo**: If there's a peak loudness spike within the moment (the single highest 1-2s window), suggest 0.5x slow-mo for 2-3s around that peak. Include exact start/end timestamps.
-- **Replay**: If the moment's score is > 90, suggest an instant replay of the peak 2-3 seconds at 0.7x speed.
-
-Attach suggestions to each moment in the output.
+- If no moments are detected at all: report "No significant moments detected"
 
 ## Output
 
@@ -231,18 +238,14 @@ Return a structured list. Print it as a fenced JSON code block so the calling co
   "source_duration": 12255.0,
   "session_mean": 42.3,
   "session_stddev": 18.7,
-  "threshold": 61.0,
+  "noise_floor_db": -62.3,
   "transcript_path": "<tmp_dir>/voice.srt",
-  "word_timestamps_path": "<tmp_dir>/voice.json",
   "timing": {
     "audio_probe_ms": 4200,
     "whisper_ms": 758000,
     "visual_analysis_ms": 194000,
     "scoring_ms": 800
   },
-  "word_frequency_alerts": [
-    { "word": "bazdmeg", "count": 47 }
-  ],
   "moments": [
     {
       "index": 1,
@@ -251,43 +254,37 @@ Return a structured list. Print it as a fenced JSON code block so the calling co
       "duration": 39.0,
       "score": 95,
       "signals": ["volume_spike", "high_freq", "crosstalk", "visual_motion"],
-      "description": "Mass laughter + 3 voices overlapping with on-screen explosion",
-      "transcript_excerpt": "DID HE JUST— NO WAY! [laughing]",
-      "suggested_edits": [
-        {
-          "type": "text_popup",
-          "text": "NO WAY!",
-          "timestamp": "00:12:35"
-        },
-        {
-          "type": "sfx",
-          "file": "dramatic_boom.mp3",
-          "timestamp": "00:12:33"
-        },
-        {
-          "type": "slowmo",
-          "start": "00:12:33",
-          "end": "00:12:36",
-          "speed": 0.5
-        },
-        {
-          "type": "replay",
-          "start": "00:12:33",
-          "end": "00:12:36",
-          "speed": 0.7
-        }
-      ]
-    }
-  ],
-  "excluded": [
+      "audio_description": "Mass laughter, 3 voices overlapping, volume spike +12dB above mean",
+      "screen_description": "Explosion effect, rapid scene changes (5 in 3s), high sustained motion",
+      "transcript_excerpt": "DID HE JUST— NO WAY! [laughing]"
+    },
     {
-      "index": 8,
+      "index": 2,
+      "start": "00:34:12",
+      "end": "00:34:55",
+      "duration": 43.0,
+      "score": 88,
+      "signals": ["drama", "volume_spike", "visual_motion"],
+      "audio_description": "4s silence followed by sudden shouting, dramatic tension-release pattern",
+      "screen_description": "Static menu screen transitions to intense action sequence",
+      "transcript_excerpt": "NEEEEM! Várj... WHAT?!"
+    },
+    {
+      "index": 3,
       "start": "01:05:18",
       "end": "01:05:42",
       "duration": 24.0,
-      "score": 68,
-      "reason": "Below threshold (61.0)"
+      "score": 55,
+      "signals": ["volume_spike"],
+      "audio_description": "Brief volume spike, single speaker, moderate energy",
+      "screen_description": "Menu navigation, minimal visual motion",
+      "transcript_excerpt": "na jó, ez szar volt"
     }
   ]
 }
 ```
+
+**Important:** Return ALL detected moments sorted by score descending, not just high-scoring ones. The calling command handles threshold filtering. Each moment MUST include:
+- `audio_description`: What's happening in the audio (volume spikes, laughter, silence, crosstalk, tension patterns, etc.)
+- `screen_description`: What's happening visually (explosions, scene changes, motion level, static screens, menus, etc.)
+- `transcript_excerpt`: Relevant Whisper transcript text (if available)

@@ -1,6 +1,6 @@
 ---
 description: Edit gameplay videos into highlight reels or short-form clips
-argument-hint: <video_path> [--style clean|funny] [--platform youtube|tiktok|both] [--language hu] [--duration 5m] [--mode analyze|auto] [--output path]
+argument-hint: <video_path> [--platform youtube|tiktok|both] [--language hu] [--score-threshold 70] [--duration 5m] [--mode analyze|auto] [--output path]
 allowed-tools: Bash(ffmpeg:*), Bash(ffprobe:*), Bash(whisper:*), Bash(python:*), Bash(python3:*), Bash(ls:*), Bash(mkdir:*), Bash(rm:*), Bash(cat:*), Bash(head:*), Bash(date:*), Bash(stat:*), Bash(mktemp:*), Bash(df:*)
 ---
 
@@ -12,19 +12,19 @@ You are editing a gameplay video into a highlight reel or short-form clips.
 
 From the user's input, extract:
 - **video_path** (required): path to the source video file
-- **style** (default: `clean`): one of `clean`, `funny`
 - **platform** (default: `youtube`): one of `youtube`, `tiktok`, `both`
 - **language** (default: `hu`): Whisper language code
-- **duration** (default: `5m` for youtube, individual clips for tiktok): target duration like `5m`, `10m`, `60s`, `3m`
+- **score-threshold** (default: `70`): minimum score to include a moment (0-100). Used in both auto and analyze modes as the default filter.
+- **duration** (optional): target duration like `5m`, `10m`, `60s`. If provided, overrides score-threshold — selects the highest-scoring moments that fit within the target duration.
 - **mode** (default: `analyze`): one of `analyze`, `auto`
-- **output** (default: `Outs/<source_basename>_edit.mp4` relative to source video's parent directory)
+- **output** (default: `Outs/<source_basename>_edit.mp4` relative to source video's parent directory). For TikTok clips, each file includes the moment's score: `<basename>_s<SCORE>_tk_<NN>.mp4`
 
 ## Validate
 
 1. Check the video file exists: `ls -la "<video_path>"`
 2. Check ffmpeg is available: `ffmpeg -version`
 3. Check video has audio tracks: `ffprobe -v quiet -print_format json -show_streams "<video_path>"` — if no stream has `codec_type == "audio"`, report "Error: No audio tracks found in source video" and stop
-4. Read the style file from this plugin's `styles/<style>.md` — parse the YAML frontmatter for parameters
+4. Read the style file from this plugin's `styles/clean.md` — parse the YAML frontmatter for parameters
 5. Probe source video for resolution and fps:
    ```bash
    ffprobe -v quiet -print_format json -show_streams "<video_path>"
@@ -49,14 +49,13 @@ If mode is `analyze` AND not all parameters were provided via CLI flags, present
 ```
 Quick setup:
 - Language? (default: hu)
-- Style? clean / funny (default: clean)
 - Platform? youtube / tiktok / both (default: youtube)
-- Duration? (default: 5m for youtube, individual clips for tiktok)
+- Score threshold? (default: 70) — include all moments above this score
 ```
 
 Parse the user's response flexibly:
 - They can answer all, some, or none (enter = all defaults)
-- Match answers to fields by keyword (e.g., "funny" → style, "tiktok" → platform, "en" → language, "10m" → duration)
+- Match answers to fields by keyword (e.g., "tiktok" → platform, "en" → language, "50" → score_threshold)
 - If ambiguous, ask for clarification
 
 If mode is `auto` OR all parameters were provided via CLI flags, skip the prompt. Use defaults for any missing values.
@@ -74,89 +73,83 @@ TMP=$(mktemp -d "/tmp/gameplay-editor-XXXXXX")
 Dispatch the **audio-analyzer** agent with:
 - video_path
 - language
-- style
-- target_duration (converted to seconds)
 - tmp_dir: $TMP
 
-The agent will return a JSON result with moments, timing data, word frequency alerts, and (if style=funny) suggested edits.
-
-### Word Counter Prompt
-
-If the analyzer returned `word_frequency_alerts` (any word appearing 10+ times):
-
-For each alert, ask:
-```
-Word frequency alert:
-  "<word>" appears <count> times. Add a running counter overlay? [y/n]
-```
-
-In `auto` mode, skip this prompt — do not add word counters automatically.
+The agent will return a JSON result with all detected moments, timing data, and noise floor.
 
 ### Present Plan (analyze mode)
 
-Present the plan to the user. Include:
+Present the plan to the user. Include ALL detected moments (not just selected ones), with moments above threshold clearly marked:
 
-**For clean style:**
 ```
-=== Highlight Plan ===
+=== Analysis Results ===
 Source: recording.mkv (3h 24m)
-Target: 5m highlight reel | Style: clean | Platform: youtube
+Score threshold: 70 | Platform: youtube
 
-Selected moments (14):
-#1  [Score: 95] 00:12:28 → 00:13:07 (39s) — "Mass laughter + 3 voices overlapping"
-#2  [Score: 88] 00:34:12 → 00:34:55 (43s) — "Dramatic comeback after silence"
+All detected moments (37):
+  ★ #1  [Score: 95] 00:12:28 → 00:13:07 (39s)
+        Audio: Mass laughter, 3 voices overlapping, volume spike +12dB
+        Screen: Explosion effect, rapid scene changes, high motion
+        Transcript: "DID HE JUST— NO WAY! [laughing]"
+
+  ★ #2  [Score: 88] 00:34:12 → 00:34:55 (43s)
+        Audio: 4s silence → sudden shouting, dramatic tension-release
+        Screen: Static menu → intense action sequence
+        Transcript: "NEEEEM! Várj... WHAT?!"
+
+  ★ #3  [Score: 75] 00:48:01 → 00:48:28 (27s)
+        Audio: Sustained high-freq energy (laughter), moderate volume
+        Screen: Normal gameplay, low motion
+        Transcript: "[laughing] ez nem lehet igaz"
+
+    #4  [Score: 62] 01:05:18 → 01:05:42 (24s)
+        Audio: Brief volume spike, single speaker
+        Screen: Menu navigation, minimal motion
+        Transcript: "na jó, ez szar volt"
+
+    #5  [Score: 55] 01:22:10 → 01:22:35 (25s)
+        Audio: Moderate energy, no standout signals
+        Screen: Standard gameplay
+        Transcript: "figyelj ide..."
 ...
 
-Excluded moments (23):
-#15 [Score: 58] 01:05:18 → 01:05:42 (24s) — Below threshold (61.0)
-...
+★ = above threshold (70) — will be included
+Total above threshold: 14 moments (6m 12s)
+Total below threshold: 23 moments
 ```
 
-**For funny style (includes edit suggestions):**
-```
-=== Highlight Plan ===
-Source: recording.mkv (3h 24m)
-Target: 5m highlight reel | Style: funny | Platform: youtube
-
-Selected moments (14):
-#1  [Score: 95] 00:12:28 → 00:13:07 (39s) — "Mass laughter + 3 voices overlapping"
-    Suggested edits:
-    ✎ Text pop-up: "NO WAY!" at 00:12:35
-    ✎ SFX: dramatic_boom at 00:12:33
-    ✎ Slow-mo: 00:12:33 → 00:12:36
-    ✎ Replay: 00:12:33 → 00:12:36
-    [ ] Keep all  [ ] Remove: ___
-
-#2  [Score: 88] 00:34:12 → 00:34:55 (43s) — "Dramatic comeback after silence"
-    Suggested edits:
-    ✎ SFX: sad_violin at 00:34:15
-    [ ] Keep all  [ ] Remove: ___
-...
-```
+Each moment MUST include three description lines:
+- **Audio**: What's happening in the audio (volume spikes, laughter, silence, crosstalk, etc.)
+- **Screen**: What's happening visually (explosions, scene changes, motion level, static, menus)
+- **Transcript**: Relevant excerpt from Whisper transcript (if available)
 
 Record user review start time. Wait for user response. They may:
-- Approve: "looks good", "go", "just do it" → proceed to assembly
-- Modify: "remove #2", "add the part around 01:30:00", "make it 3 min" → update plan, re-present
-- Change style/platform: "swap to funny", "also do tiktok" → re-read preset, re-present
-- Modify edits: "remove slow-mo from #1", "no SFX on #3" → update suggestions, re-present
+- Approve: "looks good", "go", "just do it" → proceed to assembly with moments above threshold
+- Set different threshold: "use score 60" or "lower to 50" → re-filter, re-present
+- Set target duration instead: "make it 3 min" → select top-scoring moments to fill duration
+- Include/exclude specific moments: "add #4", "remove #3" → update selection
+- Change platform: "also do tiktok" → note for assembly
 
 Record user review end time: `user_review_ms`.
 
 ### Auto Mode
 
-Skip the plan presentation and word counter prompt. Select moments automatically and proceed to assembly.
+Skip the plan presentation. Select moments automatically based on:
+- If `--duration` was provided: select top-scoring moments that fit within the target duration
+- Otherwise: include all moments with score ≥ `score-threshold` (default 70)
+
+Proceed directly to assembly.
 
 ### Assembly
 
 Dispatch the **edit-assembler** agent with:
 - source_video_path
-- The approved/selected moment list (with suggested_edits if style=funny)
+- The approved/selected moment list
 - The style preset parameters (from YAML frontmatter)
 - platform: `youtube` or `tiktok`
 - output_path
 - transcript_path (if available)
-- word_timestamps_path (if available)
-- word_counter config (if user approved)
+- noise_floor_db (from analyzer output)
 - source_width, source_height, source_fps
 
 **If platform is `both`:** dispatch the edit-assembler TWICE:
@@ -181,7 +174,7 @@ Present the summary:
 Source: <filename> (<source_duration>)
 Output: <output_path> (<output_duration>, <output_size>)
 Moments: <included> included, <excluded> excluded
-Word counter: "<word>" x<count>  (only if word counter was active)
+Score threshold: <threshold>
 
 Timing:
   Audio probe:         <audio_probe time>
@@ -191,20 +184,20 @@ Timing:
   User review:         <user_review time>  (only in analyze mode)
   Segment extraction:  <extraction time>
   Audio processing:    <audio_processing time>
-  Transitions/FX:      <transitions_fx time>
+  Transitions:         <transitions time>
   Captions:            <captions time>  (only for tiktok)
   Crop & export:       <crop_export time>
   ─────────────────────────
   Total:               <total time>
 
-Style: <style> | Platform: <platform> | Tier: <tier> | Language: <language>
+Platform: <platform> | Tier: <tier> | Language: <language>
 ```
 
 For `platform=tiktok`, also list all produced clips:
 ```
 Output clips (TikTok):
-  <filename>_edit_tk_01.mp4 (<duration>, <size>) — "<description>"
-  <filename>_edit_tk_02.mp4 (<duration>, <size>) — "<description>"
+  <filename>_s95_tk_01.mp4 (<duration>, <size>) — [Score: 95] "<description>"
+  <filename>_s88_tk_02.mp4 (<duration>, <size>) — [Score: 88] "<description>"
   ...
 ```
 
@@ -218,18 +211,24 @@ For `platform=both`, show both summaries.
 - Whisper not available → warn, fall back to Minimal tier
 - No moments detected above threshold → report, suggest lowering duration
 - Segment extraction fails → skip segment, continue, report at end
-- SFX file missing → skip that SFX, warn in summary
 - Visual analysis fails → skip visual signals, reweight remaining, warn
 - Disk space < 2GB → warn before starting
 
 ## Progress Reporting
 
-Report at each stage:
+Report at each stage. In `analyze` mode (5 steps):
 ```
-[1/6] Probing audio tracks...
-[2/6] Running Whisper transcription... (estimated ~X min for Y hour video)
-[3/6] Analyzing visual motion...
-[4/6] Scoring moments... found N candidates
-[5/6] Presenting plan for approval...
-[6/6] Assembling edit... segment N/M complete
+[1/5] Probing audio tracks...
+[2/5] Running Whisper transcription... (estimated ~X min for Y hour video)
+[3/5] Analyzing visual motion and scoring moments...
+[4/5] Presenting analysis for review... (N moments found, M above threshold)
+[5/5] Assembling edit... segment N/M complete
+```
+
+In `auto` mode, skip step 4 (4 steps total):
+```
+[1/4] Probing audio tracks...
+[2/4] Running Whisper transcription...
+[3/4] Analyzing visual motion and scoring moments... (N moments found, M above threshold)
+[4/4] Assembling edit... segment N/M complete
 ```
