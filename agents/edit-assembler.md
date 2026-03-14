@@ -79,7 +79,7 @@ Combine noise reduction, normalization, and compression in one pass:
 ```bash
 START_AUDIO=$(date +%s%N)
 ffmpeg -i "$TMP/segment_<N>.mp4" \
-  -af "afftdn=nr=20:nf=<detected_noise_floor>,loudnorm=I=<platform_lufs>:LRA=11:TP=-1.5,acompressor=threshold=0.01:ratio=4:attack=5:release=50" \
+  -af "afftdn=nr=20:nf=<detected_noise_floor>,loudnorm=I=<platform_lufs>:LRA=11:TP=-1.5,acompressor=threshold=0.1:ratio=4:attack=5:release=50" \
   -c:v copy -y "$TMP/audio_<N>.mp4"
 END_AUDIO=$(date +%s%N)
 ```
