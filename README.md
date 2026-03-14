@@ -2,25 +2,61 @@
 
 A Claude Code plugin that transforms long gameplay recordings into highlight reels and short-form clips using AI-powered audio + visual analysis.
 
-## Installation
+## Prerequisites
+
+Before installing this plugin, make sure you have these on your system:
+
+| Dependency | Required | Purpose |
+|------------|----------|---------|
+| **[Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview)** | Yes | Plugin host — this is a Claude Code plugin |
+| **[ffmpeg](https://ffmpeg.org/download.html)** | Yes | All video/audio processing |
+| **Python 3.8+** | No (recommended) | Required only for Whisper transcription |
+| **[openai-whisper](https://github.com/openai/whisper)** | No (recommended) | Better moment detection, auto-captions, word frequency counter |
+
+Verify ffmpeg is available:
 
 ```bash
-# From GitHub
+ffmpeg -version
+```
+
+## Setting Up the Marketplace
+
+If you want to publish or browse this plugin via a marketplace registry, the config lives in `.claude-plugin/marketplace.json`. This file declares the plugin owner and source so that marketplace tooling can resolve it:
+
+```json
+{
+  "name": "prucsakos",
+  "owner": { "name": "prucsakos" },
+  "plugins": [
+    {
+      "name": "gameplay-editor",
+      "description": "Transform long gameplay recordings into highlight reels and short-form clips using AI-powered audio + visual analysis with funny edit suggestions",
+      "version": "2.0.0",
+      "source": { "source": "github", "repo": "prucsakos/gameplay-editor" }
+    }
+  ]
+}
+```
+
+No additional setup is needed — the marketplace entry points back to the GitHub repo where the plugin is hosted.
+
+## Installing the Plugin
+
+```bash
+# Install from GitHub
 /plugin install github:prucsakos/gameplay-editor
 
-# From a specific release
+# Or pin a specific version
 /plugin install github:prucsakos/gameplay-editor@v2.0.0
 ```
 
-## Setup
-
-Run once after installation to install Whisper (optional but recommended):
+After installing, run the one-time setup command to verify dependencies and optionally install Whisper:
 
 ```bash
 /gameplay-setup
 ```
 
-Requires: ffmpeg in PATH (mandatory), Python 3.8+ (for Whisper, optional).
+This checks that ffmpeg is in your PATH and walks you through installing openai-whisper if Python is available. Whisper is optional but enables the **Full tier** of detection (transcription, captions, word frequency counter). Without it, the plugin falls back to the **Minimal tier** (volume + visual motion only).
 
 ## Usage
 
@@ -72,7 +108,25 @@ The `assets/sfx/` directory contains bundled sound effects for the funny style. 
 8. Assembles the edit with ffmpeg (transitions, effects, crop, captions)
 9. Exports MP4 with a detailed pipeline timing summary
 
-## Requirements
+## Plugin Structure
 
-- **ffmpeg** (mandatory) — video/audio processing
-- **Python 3.8+ + openai-whisper** (optional) — better moment detection, auto-captions, word counter
+```
+gameplay-editor/
+├── .claude-plugin/
+│   ├── plugin.json          # Plugin metadata (name, version, author)
+│   └── marketplace.json     # Marketplace registry entry
+├── commands/
+│   ├── gameplay-edit.md      # Main editing command
+│   └── gameplay-setup.md     # One-time setup command
+├── agents/
+│   ├── audio-analyzer.md     # Moment detection agent
+│   └── edit-assembler.md     # Video assembly agent
+├── skills/
+│   └── gameplay-editor/
+│       └── SKILL.md          # Skill trigger definition
+├── styles/
+│   ├── clean.md              # Clean style preset
+│   └── funny.md              # Funny/meme style preset
+└── assets/
+    └── sfx/                  # Bundled sound effects (funny style)
+```
