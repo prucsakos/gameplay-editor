@@ -40,14 +40,14 @@ If you want to publish or browse this plugin via a marketplace registry, the con
 
 No additional setup is needed — the marketplace entry points back to the GitHub repo where the plugin is hosted.
 
-## Installing the Plugin
+## Installation
 
 ```bash
-# Install from GitHub
-/plugin install github:prucsakos/gameplay-editor
+# 1. Add the marketplace
+/plugin marketplace add prucsakos/gameplay-editor
 
-# Or pin a specific version
-/plugin install github:prucsakos/gameplay-editor@v2.0.0
+# 2. Install the plugin
+/plugin install gameplay-editor@prucsakos-gameplay-editor
 ```
 
 After installing, run the one-time setup command to verify dependencies and optionally install Whisper:
