@@ -12,6 +12,7 @@ Before installing this plugin, make sure you have these on your system:
 | **[ffmpeg](https://ffmpeg.org/download.html)** | Yes | All video/audio processing |
 | **Python 3.8+** | No (recommended) | Required only for Whisper transcription |
 | **[openai-whisper](https://github.com/openai/whisper)** | No (recommended) | Better moment detection, auto-captions, word frequency counter |
+| **[PyTorch](https://pytorch.org/)** | No (auto-installed with Whisper) | Hard dependency of Whisper — installed automatically via `pip install openai-whisper`. For GPU acceleration, install the CUDA build from [pytorch.org](https://pytorch.org/get-started/locally/) |
 
 Verify ffmpeg is available:
 

@@ -1,5 +1,5 @@
 ---
-description: One-time setup for gameplay-editor — installs Whisper and verifies ffmpeg
+description: One-time setup for gameplay-editor — installs Whisper and verifies ffmpeg, torch, and CUDA
 allowed-tools: Bash(ffmpeg:*), Bash(ffprobe:*), Bash(pip:*), Bash(pip3:*), Bash(python:*), Bash(python3:*), Bash(whisper:*), Bash(where:*), Bash(which:*), Bash(curl:*), Bash(ls:*), Bash(mkdir:*)
 ---
 
@@ -37,6 +37,21 @@ whisper --help
 If `whisper` CLI works, report: "Whisper installed successfully. The small model (~466MB) will download automatically on first use."
 
 If installation fails, report the error and tell the user: "Whisper installation failed. The plugin will use volume-based analysis only. You can retry later with /gameplay-setup."
+
+## Step 3b: Verify PyTorch and CUDA
+
+PyTorch (torch) is a hard dependency of openai-whisper — Whisper cannot run without it. If Whisper installed successfully, torch is already present. Verify and check GPU availability:
+
+```bash
+python -c "import torch; print(f'PyTorch {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}'); print(f'GPU: {torch.cuda.get_device_name(0)}' if torch.cuda.is_available() else 'GPU: none (CPU mode)')"
+```
+Or use `python3` if `python` is not available.
+
+Report the result:
+- If CUDA is available: "PyTorch <version> with CUDA — Whisper will use GPU acceleration (faster transcription)."
+- If CUDA is not available: "PyTorch <version> CPU-only — Whisper will run on CPU (slower). For GPU acceleration, install the CUDA version of PyTorch: visit https://pytorch.org/get-started/locally/ and select your CUDA version."
+
+If torch import fails but whisper installed, something went wrong — report: "PyTorch not found despite Whisper being installed. Try: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 (for CUDA 12.1) or pip install torch (CPU-only)."
 
 ## Step 4: Download Sound Effects (optional)
 
@@ -101,6 +116,9 @@ Sources:
 Report the final status:
 - ffmpeg: OK / MISSING (mandatory)
 - ffprobe: OK / MISSING (mandatory)
+- Python: OK (<version>) / MISSING (optional)
+- PyTorch: OK (<version>) / NOT INSTALLED (optional)
+- CUDA/GPU: OK (<GPU name>) / CPU-only / N/A
 - Whisper: OK / NOT INSTALLED (optional)
 - SFX library: N files / EMPTY (optional)
 - Detection tier: Full (with Whisper) / Minimal (ffmpeg only)
