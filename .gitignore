@@ -13,3 +13,6 @@ Thumbs.db
 # Python
 __pycache__/
 *.pyc
+
+# SFX originals (keep only the processed/trimmed versions)
+assets/sfx/originals/
