@@ -1,15 +1,15 @@
 # Gameplay Editor
 
-A Claude Code plugin that transforms long gameplay recordings into highlight reels and short-form clips using AI-powered audio analysis.
+A Claude Code plugin that transforms long gameplay recordings into highlight reels and short-form clips using AI-powered audio + visual analysis.
 
 ## Installation
 
 ```bash
 # From GitHub
-/plugin install github:prucs/gameplay-editor
+/plugin install github:prucsakos/gameplay-editor
 
 # From a specific release
-/plugin install github:prucs/gameplay-editor@v1.0.0
+/plugin install github:prucsakos/gameplay-editor@v2.0.0
 ```
 
 ## Setup
@@ -25,40 +25,54 @@ Requires: ffmpeg in PATH (mandatory), Python 3.8+ (for Whisper, optional).
 ## Usage
 
 ```bash
-# Analyze a recording and create a 5-min highlight reel (default)
+# Basic — will prompt for language, style, platform, duration
 /gameplay-edit path/to/recording.mkv
 
-# Specific style and duration
-/gameplay-edit recording.mkv --style polished --duration 10m
+# Skip the prompt with flags
+/gameplay-edit recording.mkv --style funny --platform tiktok --language hu
 
-# Short-form clip for TikTok/Shorts
-/gameplay-edit recording.mkv --style shortform --duration 60s
+# Auto-edit (no prompts, no approval step, all defaults)
+/gameplay-edit recording.mkv --mode auto
 
-# Auto-edit (no approval step)
-/gameplay-edit recording.mkv --mode auto --style clean
+# YouTube + TikTok exports from the same moments
+/gameplay-edit recording.mkv --style funny --platform both --duration 10m
 
-# Manual timestamps
-/gameplay-edit recording.mkv --mode manual --timestamps "01:23:00-01:24:30,02:10:00-02:11:15"
+# Custom output path
+/gameplay-edit recording.mkv --output path/to/output.mp4
 ```
 
 ## Styles
 
 Edit the files in `styles/` to customize:
 
-- **clean** — Minimal cuts, subtle fades, no text. Best for longer highlight reels.
-- **polished** — Dissolve transitions, context text overlays, speed ramps. YouTube style.
-- **shortform** — 9:16 crop, auto-captions, fast cuts. TikTok/Shorts/Reels.
+- **clean** — Minimal cuts, subtle fades, no effects. Best for longer highlight reels where the content speaks for itself.
+- **funny** — Meme-style editing with AI-suggested text pop-ups, sound effects, slow-mo, and instant replay. All suggestions shown for approval before applying.
+
+## Platforms
+
+Target platform is separate from style:
+
+- **youtube** — 16:9 original aspect ratio, single highlight reel (default 5m)
+- **tiktok** — 9:16 center crop, multiple individual short clips (15-60s), auto-captions, louder audio for mobile
+- **both** — exports both formats from the same moments
+
+## Sound Effects
+
+The `assets/sfx/` directory contains bundled sound effects for the funny style. You can also place a `sfx/` directory next to your source video with custom sounds — user sounds override bundled ones with the same filename.
 
 ## How It Works
 
 1. Probes audio tracks to find voice vs. game audio
-2. Runs Whisper transcription on voice tracks (falls back to volume analysis if Whisper unavailable)
-3. Scores 5-second windows by: volume spikes, laughter/screaming, simultaneous speakers, silence→noise patterns
-4. Presents a ranked plan of the best moments
-5. Assembles the edit with ffmpeg (transitions, audio normalization, captions, crop)
-6. Exports MP4
+2. Runs Whisper transcription with specified language (falls back to volume analysis if unavailable)
+3. Analyzes visual motion via scene detection and frame difference
+4. Scores 5-second windows by: laughter/screaming (30%), drama (25%), volume spikes (20%), visual motion (15%), crosstalk (10%)
+5. Detects frequently spoken words and suggests running counter overlays
+6. Presents a ranked plan with optional funny edit suggestions (if style=funny)
+7. Processes audio: noise reduction, normalization, compression, game audio leveling
+8. Assembles the edit with ffmpeg (transitions, effects, crop, captions)
+9. Exports MP4 with a detailed pipeline timing summary
 
 ## Requirements
 
 - **ffmpeg** (mandatory) — video/audio processing
-- **Python 3.8+ + openai-whisper** (optional) — better moment detection + auto-captions
+- **Python 3.8+ + openai-whisper** (optional) — better moment detection, auto-captions, word counter
