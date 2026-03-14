@@ -21,9 +21,10 @@ This skill delegates to two commands and two agents:
 
 1. **`/gameplay-setup`** — One-time setup (install Whisper, verify ffmpeg)
 2. **`/gameplay-edit <path>`** — Main workflow:
-   - **audio-analyzer agent** detects exciting moments via audio analysis
-   - User reviews and approves the moment plan
-   - **edit-assembler agent** cuts, transitions, and exports the final video
+   - Prompts for language, style, platform, and duration
+   - **audio-analyzer agent** detects exciting moments via audio + visual analysis
+   - User reviews and approves the moment plan (with funny edit suggestions if style=funny)
+   - **edit-assembler agent** processes audio, applies edits, and exports the final video
 
 ## Quick Start
 
@@ -32,19 +33,26 @@ If the user asks about setup or dependencies, invoke `/gameplay-setup`.
 
 ## Styles
 
-Three style presets in `styles/` directory (user-editable):
-- **clean** — Minimal cuts, fade transitions, no text
-- **polished** — Dissolve transitions, context overlays, speed ramps
-- **shortform** — 9:16 crop, auto-captions, fast cuts for TikTok/Shorts
+Two style presets in `styles/` directory (user-editable):
+- **clean** — Minimal cuts, fade transitions, no effects. Content speaks for itself.
+- **funny** — Meme-style editing: text pop-ups, sound effects, slow-mo, instant replay. All suggestions require user approval.
+
+## Platforms
+
+Target platform is asked separately from style:
+- **youtube** — 16:9, single highlight reel (default 5m)
+- **tiktok** — 9:16, multiple individual short clips (15-60s each), auto-captions
+- **both** — exports both formats from the same moments
 
 ## Detection
 
-Audio analysis scores moments by:
-- Voice volume spikes (35%)
-- Laughter/screaming via high-frequency energy (25%)
-- Simultaneous speakers / crosstalk (20%)
-- Tension-release: silence followed by noise explosion (20%)
+Audio + visual analysis scores moments by:
+- Laughter/screaming via high-frequency energy (30%)
+- Drama detection: silence→noise + transcript emotion (25%)
+- Voice volume spikes (20%)
+- Visual motion: scene changes + frame difference (15%)
+- Simultaneous speakers / crosstalk (10%)
 
 Two tiers:
-- **Full** (Whisper installed): transcription + all signals + auto-captions
-- **Minimal** (ffmpeg only): volume-based detection, no captions
+- **Full** (Whisper installed, default): transcription + all signals + captions + word frequency detection
+- **Minimal** (ffmpeg only): volume + visual motion based detection, no captions
