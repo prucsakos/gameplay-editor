@@ -6,6 +6,14 @@ audio_normalization: standard
 aspect_ratio: per-platform
 export_codec: libx264
 export_quality: 20
+transcript_signals:
+  - humor
+  - dramatic reactions
+  - surprised exclamations
+  - banter
+  - storytelling peaks
+  - emotional outbursts
+  - comedic timing
 ---
 
 # Clean Style
