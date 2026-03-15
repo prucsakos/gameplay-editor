@@ -172,10 +172,8 @@ If no silence ≥3s is found, fall back to the first 30 seconds of the video and
 
 For each silence period ≥3s, analyze the 5-second window immediately after silence ends:
 - Measure loudness delta vs. session mean
-- If Whisper transcript available: check for emotional punctuation (`!`, `?!`), ALL CAPS words, repeated letters ("NEEEEM", "WHAAAAT") in that window
-- Score = silence_duration_factor * loudness_delta * transcript_emotion_bonus
+- Score = silence_duration_factor × loudness_delta
   - silence_duration_factor = min(silence_duration / 3.0, 1.5)
-  - transcript_emotion_bonus = 1.0 (no transcript) | 1.3 (has exclamation) | 1.5 (ALL CAPS or repeated letters)
 
 ### Crosstalk Detection (Multi-track only)
 
@@ -185,25 +183,21 @@ If single track with Whisper: check for Whisper segments with gaps < 0.3s betwee
 
 ### Composite Scoring
 
-**Full Tier weights (default):**
-| Signal | Weight |
-|--------|--------|
-| Voice volume spike (dB above mean) | 20% |
-| High-freq energy (laughter/screaming) | 30% |
-| Crosstalk/simultaneous speakers | 10% |
-| Visual motion (scene changes + frame diff) | 15% |
-| Drama detection (silence→noise + transcript emotion) | 25% |
+Score each 5-second window using the **Minimal Tier** formula from `docs/scoring-weights.md`:
 
-Each signal is normalized to 0-1 range (where 1 = the strongest instance in the session). The weighted sum is the raw score. Add exclamation bonus (+0.1 per exclamation in Whisper transcript, capped at +0.3).
+    score = 0.20 × Volume + 0.25 × HighFreq + 0.25 × Visual + 0.15 × DynRange + 0.15 × Breadth
 
-**Minimal Tier weights (no Whisper):**
-| Signal | Weight |
-|--------|--------|
-| Voice volume spike | 35% |
-| Tension-release (silence→noise delta) | 20% |
-| Sustained high energy (≥10s above mean+1σ) | 15% |
-| Visual motion (scene changes + frame diff) | 20% |
-| Frame difference sustained activity | 10% |
+| Dimension | Weight | Source |
+|-----------|--------|--------|
+| Volume | 0.20 | Per-window RMS loudness relative to session mean (from Loudness Analysis) |
+| High Freq | 0.25 | Ratio of high-frequency energy >2kHz (from High-Frequency Energy) |
+| Visual | 0.25 | Scene change intensity + frame diff per window (from Visual Motion Analysis) |
+| Dynamic Range | 0.15 | Per-second amplitude std within each window (from Loudness Analysis) |
+| Breadth | 0.15 | Signal diversity bonus: `active_dimensions / 4`. A dimension is "active" if its normalized value > 0.08. Counts: Volume, High Freq, Visual, Dynamic Range. |
+
+Each dimension is normalized to 0-1 range (min-max across all windows in the session). The weighted sum is the raw score per window.
+
+**Note:** This is always the Minimal Tier formula. When a valid transcript exists, the calling command (gameplay-edit) recomputes composite scores using the Full Tier 6-dimension formula with the transcript-analyzer's Transcript scores. The audio-analyzer's scores serve as preliminary rankings.
 
 ```bash
 END_SCORING=$(date +%s%N)
