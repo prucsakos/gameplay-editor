@@ -2,7 +2,7 @@
 name: edit-assembler
 description: |
   Use this agent to assemble a gameplay highlight reel from a list of moments.
-  Handles segment extraction, transitions, audio mixing, captions, crop, and export.
+  Handles segment extraction, transitions, audio mixing, crop, and export.
 model: sonnet
 ---
 
@@ -148,38 +148,11 @@ ffmpeg -i "$TMP/segment_<N>.mp4" \
   -c:a copy -y "$TMP/cropped_<N>.mp4"
 ```
 
-#### 4b: Generate and Burn Captions (if transcript available)
-
-1. Read the `.srt` file from transcript_path
-2. For each moment, extract subtitle entries within its time range
-3. Adjust timestamps relative to segment start
-4. Write trimmed `.srt`: `$TMP/captions_<N>.srt`
-5. **Ensure subtitle file is UTF-8 with BOM** for correct rendering of non-ASCII characters (Hungarian, etc.):
-   ```bash
-   python3 -c "
-   import codecs
-   path = '$TMP/captions_<N>.srt'
-   with open(path, 'r', encoding='utf-8') as f: content = f.read()
-   with open(path, 'w', encoding='utf-8-sig') as f: f.write(content)
-   "
-   ```
-
-6. Burn onto video (combined with crop in one pass if possible):
-
-```bash
-ffmpeg -i "$TMP/segment_<N>.mp4" \
-  -vf "crop=<crop_width>:<crop_height>:<crop_x>:0,scale=1080:1920,subtitles='$TMP/captions_<N>.srt':charenc=UTF-8:force_style='FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,Alignment=2'" \
-  -c:a copy -y "$TMP/cropped_<N>.mp4"
-```
-Note: on Windows, escape colons in the subtitle path (replace `:` with `\:`). The `charenc=UTF-8` parameter ensures ffmpeg reads the subtitle file with correct encoding.
-
-Track captions time as `captions_ms`.
-
-#### 4c: TikTok High-Stimulus Pacing
+#### 4b: TikTok High-Stimulus Pacing
 
 For each moment, trim to the peak 5-10 seconds (around the highest-scoring window). If the moment is already ≤10s, keep it as-is. Apply 0.2s hard cuts between sub-segments within each clip.
 
-#### 4d: TikTok Clip Duration Rules
+#### 4c: TikTok Clip Duration Rules
 
 - Clips under 15s: extend lead-in and lead-out by 2s each. If still under 15s, extend further proportionally.
 - Clips over 60s: trim to the peak 60 seconds (highest-scoring contiguous portion).
