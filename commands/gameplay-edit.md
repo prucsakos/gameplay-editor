@@ -75,7 +75,7 @@ Dispatch the **audio-analyzer** agent with:
 - language
 - tmp_dir: $TMP
 
-The agent returns a JSON result with all detected moments (preliminary 5-dim scores), per-window dimension arrays (`window_dimensions`), timing data, noise floor, and `has_transcript` flag.
+The agent returns a JSON result with all detected moments (preliminary Minimal Tier scores), per-window dimension arrays (`window_dimensions` with volume, high_freq, crosstalk, tension_release), per-window exclamation bonus counts, timing data, noise floor, and `has_transcript` flag.
 
 ### Run Transcript Analysis (Full Tier only)
 
@@ -83,7 +83,7 @@ The agent returns a JSON result with all detected moments (preliminary 5-dim sco
 1. The audio-analyzer's output has `has_transcript: true`
 2. The active style defines `transcript_signals` (parsed from frontmatter)
 
-If either condition is false, skip this step. Use the audio-analyzer's 5-dim scores as final scores and its original timestamps. The pipeline step count adjusts accordingly (5 steps in analyze mode, 4 in auto mode — same as current pipeline).
+If either condition is false, skip this step. Use the audio-analyzer's Minimal Tier scores as final scores and its original timestamps. The pipeline step count adjusts accordingly (5 steps in analyze mode, 4 in auto mode — same as current pipeline).
 
 **Partial transcript:** If `has_transcript` is `true` but the `.srt` only covers part of the video (Whisper partial failure), dispatch proceeds normally. The transcript-analyzer handles uncovered windows by scoring them 0.
 
@@ -101,13 +101,15 @@ The agent returns per-window Transcript scores, discovered moments, clip summari
 
 After receiving the transcript-analyzer's output, recompute scores using the Full Tier 6-dimension formula from `docs/scoring-weights.md`:
 
-    score = 0.175 × Volume + 0.225 × HighFreq + 0.25 × Visual + 0.125 × DynRange + 0.15 × Breadth + 0.075 × Transcript
+    score = 0.25 × Volume + 0.20 × HF + 0.15 × Crosstalk + 0.15 × TensionRelease + 0.15 × Breadth + 0.10 × Transcript
+    + exclamation bonus (+0.1 per exclamation, capped at +0.3)
 
 For each 5-second window:
-1. Read the 4 audio dimensions from `window_dimensions` (audio-analyzer output)
+1. Read the 4 audio dimensions from `window_dimensions`: `volume`, `high_freq`, `crosstalk`, `tension_release` (audio-analyzer output)
 2. Read the Transcript score from `transcript_scores` (transcript-analyzer output)
-3. Compute Breadth: count how many of the 5 dimensions (Volume, HighFreq, Visual, DynRange, Transcript) have normalized value > 0.08. Breadth = `active_count / 5`
-4. Compute weighted sum
+3. Read the exclamation bonus from the audio-analyzer's per-window exclamation counts (applied after weighted sum, +0.1 each, capped +0.3)
+4. Compute Breadth: count how many of the 5 scored dimensions (Volume, HF, Crosstalk, TensionRelease, Transcript) have normalized value > 0.08. Breadth = `active_count / 5`. Breadth itself is excluded from the count.
+5. Compute weighted sum
 
 **Merge discovered moments:**
 - For each discovered moment from transcript-analyzer, check if it overlaps with any existing audio-analyzer moment
@@ -141,27 +143,22 @@ Score threshold: 70 | Platform: youtube
 All detected moments (37):
   ★ #1  [Score: 95] 00:12:28 → 00:13:07 (39s)
         Audio: Mass laughter, 3 voices overlapping, volume spike +12dB
-        Screen: Explosion effect, rapid scene changes, high motion
         Summary: "DID HE JUST— NO WAY! [laughing]"
 
   ★ #2  [Score: 88] 00:34:12 → 00:34:55 (43s)
         Audio: 4s silence → sudden shouting, dramatic tension-release
-        Screen: Static menu → intense action sequence
         Summary: "NEEEEM! Várj... WHAT?!"
 
   ★ #3  [Score: 75] 00:48:01 → 00:48:28 (27s)
         Audio: Sustained high-freq energy (laughter), moderate volume
-        Screen: Normal gameplay, low motion
         Summary: "[laughing] ez nem lehet igaz"
 
     #4  [Score: 62] 01:05:18 → 01:05:42 (24s)
         Audio: Brief volume spike, single speaker
-        Screen: Menu navigation, minimal motion
         Summary: "na jó, ez szar volt"
 
     #5  [Score: 55] 01:22:10 → 01:22:35 (25s)
         Audio: Moderate energy, no standout signals
-        Screen: Standard gameplay
         Summary: "figyelj ide..."
 ...
 
@@ -170,9 +167,8 @@ Total above threshold: 14 moments (6m 12s)
 Total below threshold: 23 moments
 ```
 
-Each moment MUST include three description lines:
-- **Audio**: What's happening in the audio (volume spikes, laughter, silence, crosstalk, etc.)
-- **Screen**: What's happening visually (explosions, scene changes, motion level, static, menus)
+Each moment MUST include two description lines:
+- **Audio**: What's happening in the audio (volume spikes, laughter, crosstalk, tension-release, etc.)
 - **Summary**: Clip summary from transcript-analyzer (if available), or Whisper transcript excerpt as fallback
 
 Record user review start time. Wait for user response. They may:
@@ -229,8 +225,8 @@ Score threshold: <threshold>
 
 Timing:
   Audio probe:         <audio_probe time>
+  Preprocessing:       <preprocessing time>
   Whisper:             <whisper time>
-  Visual analysis:     <visual_analysis time>
   Scoring:             <scoring time>
   Transcript analysis: <transcript_analysis time>  (only in Full Tier)
   User review:         <user_review time>  (only in analyze mode)
@@ -262,7 +258,6 @@ For `platform=both`, show both summaries.
 - Whisper not available → warn, fall back to Minimal tier
 - No moments detected above threshold → report, suggest lowering duration
 - Segment extraction fails → skip segment, continue, report at end
-- Visual analysis fails → skip visual signals, reweight remaining, warn
 - Disk space < 2GB → warn before starting
 
 ## Progress Reporting
@@ -273,7 +268,7 @@ Report at each stage. Step counts depend on whether the transcript-analyzer runs
 
     [1/6] Probing audio tracks...
     [2/6] Running Whisper transcription (small model)... (estimated ~X min for Y hour video)
-    [3/6] Analyzing audio and visual signals...
+    [3/6] Scoring audio signals...
     [4/6] Analyzing transcript...
     [5/6] Presenting analysis for review... (N moments found, M above threshold)
     [6/6] Assembling edit... segment N/M complete
@@ -282,7 +277,7 @@ Report at each stage. Step counts depend on whether the transcript-analyzer runs
 
     [1/5] Probing audio tracks...
     [2/5] Running Whisper transcription (small model)...
-    [3/5] Analyzing audio and visual signals...
+    [3/5] Scoring audio signals...
     [4/5] Analyzing transcript...
     [5/5] Assembling edit... segment N/M complete
 
@@ -290,7 +285,7 @@ Report at each stage. Step counts depend on whether the transcript-analyzer runs
 
     [1/5] Probing audio tracks...
     [2/5] Running Whisper transcription... (estimated ~X min for Y hour video)
-    [3/5] Analyzing visual motion and scoring moments...
+    [3/5] Scoring audio signals...
     [4/5] Presenting analysis for review... (N moments found, M above threshold)
     [5/5] Assembling edit... segment N/M complete
 
@@ -298,5 +293,5 @@ Report at each stage. Step counts depend on whether the transcript-analyzer runs
 
     [1/4] Probing audio tracks...
     [2/4] Running Whisper transcription...
-    [3/4] Analyzing visual motion and scoring moments... (N moments found, M above threshold)
+    [3/4] Scoring audio signals... (N moments found, M above threshold)
     [4/4] Assembling edit... segment N/M complete
