@@ -68,14 +68,66 @@ If mode is `auto` OR all parameters were provided via CLI flags, skip the prompt
 TMP=$(mktemp -d "/tmp/gameplay-editor-XXXXXX")
 ```
 
-### Run Analysis
+### Run Audio Analysis
 
 Dispatch the **audio-analyzer** agent with:
 - video_path
 - language
 - tmp_dir: $TMP
 
-The agent will return a JSON result with all detected moments, timing data, and noise floor.
+The agent returns a JSON result with all detected moments (preliminary 5-dim scores), per-window dimension arrays (`window_dimensions`), timing data, noise floor, and `has_transcript` flag.
+
+### Run Transcript Analysis (Full Tier only)
+
+**Gate:** Only dispatch the transcript-analyzer if ALL of the following are true:
+1. The audio-analyzer's output has `has_transcript: true`
+2. The active style defines `transcript_signals` (parsed from frontmatter)
+
+If either condition is false, skip this step. Use the audio-analyzer's 5-dim scores as final scores and its original timestamps. The pipeline step count adjusts accordingly (5 steps in analyze mode, 4 in auto mode — same as current pipeline).
+
+**Partial transcript:** If `has_transcript` is `true` but the `.srt` only covers part of the video (Whisper partial failure), dispatch proceeds normally. The transcript-analyzer handles uncovered windows by scoring them 0.
+
+If both conditions are true, dispatch the **transcript-analyzer** agent with:
+- transcript_srt: the `.srt` path from audio-analyzer output
+- moments: the audio-analyzer's full moment list
+- transcript_signals: from the active style's YAML frontmatter
+- language
+- source_duration: from audio-analyzer output
+- window_size: 5.0
+
+The agent returns per-window Transcript scores, discovered moments, clip summaries, and refined cut boundaries.
+
+### Recompute Composite Scores (Full Tier only)
+
+After receiving the transcript-analyzer's output, recompute scores using the Full Tier 6-dimension formula from `docs/scoring-weights.md`:
+
+    score = 0.175 × Volume + 0.225 × HighFreq + 0.25 × Visual + 0.125 × DynRange + 0.15 × Breadth + 0.075 × Transcript
+
+For each 5-second window:
+1. Read the 4 audio dimensions from `window_dimensions` (audio-analyzer output)
+2. Read the Transcript score from `transcript_scores` (transcript-analyzer output)
+3. Compute Breadth: count how many of the 5 dimensions (Volume, HighFreq, Visual, DynRange, Transcript) have normalized value > 0.08. Breadth = `active_count / 5`
+4. Compute weighted sum
+
+**Merge discovered moments:**
+- For each discovered moment from transcript-analyzer, check if it overlaps with any existing audio-analyzer moment
+- If overlap: discard the discovered moment (the audio-analyzer already captured that region; the Transcript scores for those windows still contribute via recomputation)
+- If no overlap: add it to the moment list. Its 4 audio dimension scores come from `window_dimensions` for the corresponding windows. Its Transcript score comes from `transcript_scores`.
+
+**Apply merging and padding:**
+- Adjacent windows (within 10s) that both score above the session mean merge into one continuous segment
+- Segment score = peak window score within the segment
+- Add 2s lead-in and 1s lead-out padding (no overlap with neighbors)
+
+**Apply refined timestamps:**
+- For each moment, use the transcript-analyzer's `refined_start` and `refined_end` instead of the originals
+
+**Apply summaries:**
+- For each moment, replace `transcript_excerpt` with the transcript-analyzer's `summary`
+
+**Re-rank** all moments by composite score (descending).
+
+The moment list with refined timestamps and summaries is what gets passed to the **edit-assembler** in the Assembly step and presented to the user in analyze mode.
 
 ### Present Plan (analyze mode)
 
@@ -90,27 +142,27 @@ All detected moments (37):
   ★ #1  [Score: 95] 00:12:28 → 00:13:07 (39s)
         Audio: Mass laughter, 3 voices overlapping, volume spike +12dB
         Screen: Explosion effect, rapid scene changes, high motion
-        Transcript: "DID HE JUST— NO WAY! [laughing]"
+        Summary: "DID HE JUST— NO WAY! [laughing]"
 
   ★ #2  [Score: 88] 00:34:12 → 00:34:55 (43s)
         Audio: 4s silence → sudden shouting, dramatic tension-release
         Screen: Static menu → intense action sequence
-        Transcript: "NEEEEM! Várj... WHAT?!"
+        Summary: "NEEEEM! Várj... WHAT?!"
 
   ★ #3  [Score: 75] 00:48:01 → 00:48:28 (27s)
         Audio: Sustained high-freq energy (laughter), moderate volume
         Screen: Normal gameplay, low motion
-        Transcript: "[laughing] ez nem lehet igaz"
+        Summary: "[laughing] ez nem lehet igaz"
 
     #4  [Score: 62] 01:05:18 → 01:05:42 (24s)
         Audio: Brief volume spike, single speaker
         Screen: Menu navigation, minimal motion
-        Transcript: "na jó, ez szar volt"
+        Summary: "na jó, ez szar volt"
 
     #5  [Score: 55] 01:22:10 → 01:22:35 (25s)
         Audio: Moderate energy, no standout signals
         Screen: Standard gameplay
-        Transcript: "figyelj ide..."
+        Summary: "figyelj ide..."
 ...
 
 ★ = above threshold (70) — will be included
@@ -121,7 +173,7 @@ Total below threshold: 23 moments
 Each moment MUST include three description lines:
 - **Audio**: What's happening in the audio (volume spikes, laughter, silence, crosstalk, etc.)
 - **Screen**: What's happening visually (explosions, scene changes, motion level, static, menus)
-- **Transcript**: Relevant excerpt from Whisper transcript (if available)
+- **Summary**: Clip summary from transcript-analyzer (if available), or Whisper transcript excerpt as fallback
 
 Record user review start time. Wait for user response. They may:
 - Approve: "looks good", "go", "just do it" → proceed to assembly with moments above threshold
@@ -180,6 +232,7 @@ Timing:
   Whisper:             <whisper time>
   Visual analysis:     <visual_analysis time>
   Scoring:             <scoring time>
+  Transcript analysis: <transcript_analysis time>  (only in Full Tier)
   User review:         <user_review time>  (only in analyze mode)
   Segment extraction:  <extraction time>
   Audio processing:    <audio_processing time>
@@ -214,19 +267,36 @@ For `platform=both`, show both summaries.
 
 ## Progress Reporting
 
-Report at each stage. In `analyze` mode (5 steps):
-```
-[1/5] Probing audio tracks...
-[2/5] Running Whisper transcription... (estimated ~X min for Y hour video)
-[3/5] Analyzing visual motion and scoring moments...
-[4/5] Presenting analysis for review... (N moments found, M above threshold)
-[5/5] Assembling edit... segment N/M complete
-```
+Report at each stage. Step counts depend on whether the transcript-analyzer runs.
 
-In `auto` mode, skip step 4 (4 steps total):
-```
-[1/4] Probing audio tracks...
-[2/4] Running Whisper transcription...
-[3/4] Analyzing visual motion and scoring moments... (N moments found, M above threshold)
-[4/4] Assembling edit... segment N/M complete
-```
+**When transcript-analyzer runs — analyze mode (6 steps):**
+
+    [1/6] Probing audio tracks...
+    [2/6] Running Whisper transcription (small model)... (estimated ~X min for Y hour video)
+    [3/6] Analyzing audio and visual signals...
+    [4/6] Analyzing transcript...
+    [5/6] Presenting analysis for review... (N moments found, M above threshold)
+    [6/6] Assembling edit... segment N/M complete
+
+**When transcript-analyzer runs — auto mode (5 steps):**
+
+    [1/5] Probing audio tracks...
+    [2/5] Running Whisper transcription (small model)...
+    [3/5] Analyzing audio and visual signals...
+    [4/5] Analyzing transcript...
+    [5/5] Assembling edit... segment N/M complete
+
+**When transcript-analyzer is skipped — analyze mode (5 steps):**
+
+    [1/5] Probing audio tracks...
+    [2/5] Running Whisper transcription... (estimated ~X min for Y hour video)
+    [3/5] Analyzing visual motion and scoring moments...
+    [4/5] Presenting analysis for review... (N moments found, M above threshold)
+    [5/5] Assembling edit... segment N/M complete
+
+**When transcript-analyzer is skipped — auto mode (4 steps):**
+
+    [1/4] Probing audio tracks...
+    [2/4] Running Whisper transcription...
+    [3/4] Analyzing visual motion and scoring moments... (N moments found, M above threshold)
+    [4/4] Assembling edit... segment N/M complete
