@@ -232,6 +232,7 @@ Return a structured list. Print it as a fenced JSON code block so the calling co
   "session_mean": 42.3,
   "session_stddev": 18.7,
   "noise_floor_db": -62.3,
+  "has_transcript": true,
   "transcript_srt": "<tmp_dir>/voice.srt",
   "timing": {
     "audio_probe_ms": 4200,
@@ -239,6 +240,10 @@ Return a structured list. Print it as a fenced JSON code block so the calling co
     "visual_analysis_ms": 194000,
     "scoring_ms": 800
   },
+  "window_dimensions": [
+    { "window_start": 0.0, "window_end": 5.0, "volume": 0.32, "high_freq": 0.15, "visual": 0.08, "dyn_range": 0.22 },
+    { "window_start": 5.0, "window_end": 10.0, "volume": 0.41, "high_freq": 0.67, "visual": 0.55, "dyn_range": 0.38 }
+  ],
   "moments": [
     {
       "index": 1,
@@ -261,21 +266,14 @@ Return a structured list. Print it as a fenced JSON code block so the calling co
       "audio_description": "4s silence followed by sudden shouting, dramatic tension-release pattern",
       "screen_description": "Static menu screen transitions to intense action sequence",
       "transcript_excerpt": "NEEEEM! Várj... WHAT?!"
-    },
-    {
-      "index": 3,
-      "start": "01:05:18",
-      "end": "01:05:42",
-      "duration": 24.0,
-      "score": 55,
-      "signals": ["volume_spike"],
-      "audio_description": "Brief volume spike, single speaker, moderate energy",
-      "screen_description": "Menu navigation, minimal visual motion",
-      "transcript_excerpt": "na jó, ez szar volt"
     }
   ]
 }
 ```
+
+**New fields:**
+- `has_transcript`: `true` if Whisper produced a `.srt` with at least one speech segment. `false` if Whisper failed, was unavailable, or the `.srt` contains zero segments.
+- `window_dimensions`: Per-window normalized (0-1) values for each ffmpeg dimension (Volume, High Freq, Visual, Dynamic Range). These are the raw dimension values computed during Stage 4 scoring, before moment merging. Always included regardless of tier. The calling command uses these to compute 6-dimension composite scores when a transcript-analyzer provides the Transcript dimension.
 
 **Important:** Return ALL detected moments sorted by score descending, not just high-scoring ones. The calling command handles threshold filtering. Each moment MUST include:
 - `audio_description`: What's happening in the audio (volume spikes, laughter, silence, crosstalk, tension patterns, etc.)
