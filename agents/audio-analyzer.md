@@ -57,7 +57,7 @@ If available:
 2. Run Whisper with the specified language. **Important:** Set `PYTHONIOENCODING=utf-8` to ensure correct character encoding for languages with non-ASCII characters (e.g., Hungarian á, é, ő, ű):
    ```bash
    START_WHISPER=$(date +%s%N)
-   PYTHONIOENCODING=utf-8 whisper "<tmp_dir>/voice.wav" --model base --language <language> --output_format srt --output_dir "<tmp_dir>/"
+   PYTHONIOENCODING=utf-8 whisper "<tmp_dir>/voice.wav" --model small --language <language> --output_format srt --output_dir "<tmp_dir>/"
    END_WHISPER=$(date +%s%N)
    WHISPER_MS=$(( (END_WHISPER - START_WHISPER) / 1000000 ))
    ```
