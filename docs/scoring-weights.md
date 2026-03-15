@@ -6,31 +6,34 @@ Tuned scoring weights for gameplay highlight detection. Derived from user feedba
 
 ```
 # With valid Whisper transcript (Full Tier):
-score = 0.175 × Volume + 0.225 × HighFreq + 0.25 × Visual + 0.125 × DynRange + 0.15 × Breadth + 0.075 × Transcript
+score = 0.25 × Volume + 0.20 × HF + 0.15 × Crosstalk + 0.15 × TensionRelease + 0.15 × Breadth + 0.10 × Transcript
++ exclamation bonus (+0.1 per exclamation, capped at +0.3)
 
 # Without transcript (Minimal Tier):
-score = 0.20 × Volume + 0.25 × HighFreq + 0.25 × Visual + 0.15 × DynRange + 0.15 × Breadth
+score = 0.30 × Volume + 0.25 × HF + 0.20 × Crosstalk + 0.15 × TensionRelease + 0.10 × Breadth
++ exclamation bonus (if any transcript available)
 ```
 
 Normalized to 0–100 where the highest-scoring window = 100.
 
 ## Dimensions
 
-| Dimension | Weight | Source | Description |
-|-----------|--------|--------|-------------|
-| Volume | **0.175** | ffmpeg `astats` | Per-window RMS loudness relative to session mean. (0.20 in Minimal Tier) |
-| High Freq | **0.225** | ffmpeg spectral analysis | Ratio of high-frequency energy (>2kHz) to total energy. (0.25 in Minimal Tier) |
-| Visual | **0.25** | ffmpeg `select='gt(scene,0.3)'` | Scene change intensity per window. Same in both tiers. |
-| Dynamic Range | **0.125** | ffmpeg `astats` (per-second std) | Amplitude variation within each 5-second window. (0.15 in Minimal Tier) |
-| Breadth | **0.15** | Computed | Signal diversity bonus: `active_dimensions / 5` (Full) or `/4` (Minimal). Active if normalized > 0.08. |
-| Drama | **0.00** | — | Disabled: produces false positives on session starts, loading screens, AFK returns. |
-| Transcript | **0.075** | transcript-analyzer agent | LLM-scored per-window transcript excitement based on style's `transcript_signals`. Only active with valid Whisper output + style defines `transcript_signals`. |
+| Dimension | Weight (Full) | Weight (Minimal) | Source | Description |
+|-----------|:-------------:|:----------------:|--------|-------------|
+| Volume | **0.25** | **0.30** | ffmpeg `ebur128` | Per-window RMS loudness relative to session mean. Primary excitement signal. |
+| High Freq | **0.20** | **0.25** | ffmpeg spectral analysis | Ratio of high-frequency energy (2–4kHz). Correlates with laughter and screaming. |
+| Crosstalk | **0.15** | **0.20** | ffmpeg multi-track / Whisper gaps | Simultaneous speakers detected per window. Multi-track: both tracks above session_mean - 6dB. Single-track: Whisper segments with gaps < 0.3s + elevated volume. |
+| Tension-Release | **0.15** | **0.15** | ffmpeg `silencedetect` | Silence ≥3s followed by loudness spike. Score = min(silence_duration / 3.0, 1.5) × loudness_delta. Raw — no safeguards for session starts. |
+| Breadth | **0.15** | **0.10** | Computed | Signal diversity bonus: `active_dimensions / 5` (Full) or `/4` (Minimal). Active if normalized > 0.08. Breadth itself is excluded from the count. |
+| Transcript | **0.10** | — | transcript-analyzer agent | LLM-scored per-window transcript excitement based on style's `transcript_signals`. Only active with valid Whisper output + style defines `transcript_signals`. |
 
 ## Breadth Bonus
 
 The breadth bonus rewards moments where multiple signals fire simultaneously and penalizes one-dimensional moments.
 
 **Full Tier (with Transcript):**
+
+Five dimensions counted: Volume, High Freq, Crosstalk, Tension-Release, Transcript. Breadth itself is excluded from the count. Weight is ×0.15.
 
 | Active dims | Breadth value | Bonus points (×0.15) |
 |:-----------:|:-------------:|:--------------------:|
@@ -40,69 +43,75 @@ The breadth bonus rewards moments where multiple signals fire simultaneously and
 | 2/5 | 0.40 | ~6 pts |
 | 1/5 | 0.20 | ~3 pts |
 
-The five dimensions counted for breadth (Full Tier): Volume, High Freq, Visual, Dynamic Range, Transcript.
-
 **Minimal Tier (without Transcript):**
 
-| Active dims | Breadth value | Bonus points (×0.15) |
-|:-----------:|:-------------:|:--------------------:|
-| 4/4 | 1.00 | ~15 pts |
-| 3/4 | 0.75 | ~11 pts |
-| 2/4 | 0.50 | ~7.5 pts |
-| 1/4 | 0.25 | ~3.75 pts |
+Four dimensions counted: Volume, High Freq, Crosstalk, Tension-Release. Weight is ×0.10.
 
-The four dimensions counted for breadth (Minimal Tier): Volume, High Freq, Visual, Dynamic Range.
+| Active dims | Breadth value | Bonus points (×0.10) |
+|:-----------:|:-------------:|:--------------------:|
+| 4/4 | 1.00 | ~10 pts |
+| 3/4 | 0.75 | ~7.5 pts |
+| 2/4 | 0.50 | ~5 pts |
+| 1/4 | 0.25 | ~2.5 pts |
 
 Activation threshold: normalized value > 0.08.
 
+## Exclamation Bonus
+
+Applied whenever a Whisper transcript exists (full or partial), regardless of tier. Scanned from the `.srt` output:
+
+- `!` punctuation
+- ALL CAPS words (3+ characters)
+- Repeated letters ("NOOO", "WHAAAAT", "hahaha")
+
+Each occurrence in a 5-second window adds +0.1 to the window's score, capped at +0.3 per window. Applied after the weighted sum, before normalization to 0–100.
+
 ## Why These Weights
 
-### Problem with equal/original weights
+### Problem with v2 weights (Visual + Dynamic Range)
 
-Pure volume spikes ranked too high. A game audio spike at 01:54 with +16 dB above mean scored #3 overall despite having:
-- Zero high-frequency energy (no laughter or excited voices)
-- Zero visual activity (nothing happening on screen)
-- Only volume + dynamic range active
+The v2 formula included Visual (scene change detection) and Dynamic Range (amplitude variation). Visual scored 0–40 even for static scenes due to video compression artifacts, which diluted the formula with noise. Dynamic Range didn't discriminate between exciting and boring moments — both had similar amplitude variation. Together they absorbed ~37.5% of the Full Tier weight while contributing minimal signal quality.
 
-These are false positives — loud ≠ exciting.
+### What worked in v1
 
-### What user feedback revealed
+The v1 formula used: Volume 35%, HF 25%, Crosstalk 20%, Tension-Release 20%. This combination reliably found:
+- Group laughter (HF spike + Crosstalk)
+- Dramatic reveals (Tension-Release pattern)
+- Exclamations and reactive moments (Volume + HF)
 
-**Good moments** (confirmed exciting by the user) shared these traits:
-- At least some high-frequency energy (laughter/excitement present)
-- OR at least some visual activity (something happening on screen)
-- 3–4 dimensions active simultaneously
-- Moderate-to-high volume (but not necessarily the loudest)
+Removing Visual and DynRange and restoring these four audio-only dimensions recovers that signal quality.
 
-**Bad moments** (false positives flagged by the user) shared these traits:
-- Extremely high volume + dynamic range
-- Zero high-frequency energy AND zero visual activity
-- Only 2/4 dimensions active
-- Game audio spikes, loading screen transitions, or single loud sounds
+### Current weight rationale
 
-### Weight derivation
-
-1. **Drama → 0.00**: Session-start silence→burst was #1 in both original and equal-weight rankings. Not real gameplay content — just the stream starting up.
-
-2. **HF and Visual → 0.25 each**: These are the strongest discriminators between good and bad moments:
-   - Good moments: avg HF = 5.6, avg Visual = 6.8
-   - Bad moments: avg HF = 0.7, avg Visual = 0.0
-
-3. **Volume → 0.20**: Still important (good moments are loud) but not sufficient alone. Reduced from original 0.30 to prevent pure-volume false positives.
-
-4. **Dynamic Range → 0.15**: Present in both good and bad moments at similar levels. Useful but not discriminating on its own.
-
-5. **Breadth → 0.15**: The key innovation. A moment scoring high on only 2 dimensions gets penalized vs one scoring moderately across 3–4 dimensions. This directly targets the "just loud" false positive pattern.
+1. **Volume 0.25 / 0.30**: Primary excitement signal. Louder = more active. Slightly higher in Minimal Tier to compensate for the absence of Transcript.
+2. **High Freq 0.20 / 0.25**: Laughter and screaming concentrate energy in the 2–4kHz band. Strong discriminator between game audio spikes (low HF) and genuine reactions (high HF).
+3. **Crosstalk 0.15 / 0.20**: Group gameplay is more exciting when multiple people are talking. Detects overlapping speech on multi-track recordings and rapid back-and-forth on single-track.
+4. **Tension-Release 0.15 / 0.15**: Silence followed by a burst is a universal comedy/drama pattern. Same weight in both tiers because it's transcript-independent.
+5. **Breadth 0.15 / 0.10**: Higher in Full Tier because five dimensions are available — simultaneous firing across five signals is a stronger quality signal. Lower in Minimal Tier (four dimensions) to avoid over-rewarding incomplete data.
+6. **Transcript 0.10**: Tie-breaker and style-aware signal. LLM can catch moments that audio alone misses (e.g., a quietly delivered punchline). Capped at 0.10 to prevent transcript quality variance from dominating the score.
+7. **Exclamation bonus +0.1 / cap +0.3**: Applied post-sum, pre-normalization. Rewards the most obvious excitement markers without restructuring the weighted formula.
 
 ## Processing Pipeline
 
-1. Video divided into **5-second windows**
-2. Each dimension computed per window via ffmpeg
-3. Each dimension **normalized to 0–1** (min-max across all windows in the session)
-4. Weighted sum computed per window
-5. Adjacent above-mean windows **merged** (gap ≤ 10s) into segments
-6. Segment score = peak window score within the segment
-7. **Lead-in (2s)** and **lead-out (1s)** padding added for edit breathing room
+1. Voice track(s) extracted and preprocessed
+2. Whisper transcription on cleaned audio (small model)
+3. Audio divided into 5-second windows
+4. Each dimension computed per window via ffmpeg
+5. Exclamation bonus computed from transcript
+6. Weighted sum (Minimal Tier in audio-analyzer)
+7. Adjacent above-mean windows merged (gap ≤ 10s)
+8. Segment score = peak window score
+9. Lead-in (2s) and lead-out (1s) padding
+10. Transcript-analyzer runs (if Full Tier)
+11. Composite scores recomputed with Full Tier formula
+
+## Sound Quality Preprocessing
+
+1. Extract WAV from voice track(s)
+2. Detect longest quiet section (used as noise profile source)
+3. Measure noise profile from that section
+4. Apply ffmpeg filter chain: `afftdn` (noise reduction) + `highpass=f=80` (remove rumble below 80Hz) + `lowpass=f=12000` (remove hiss above 12kHz) + `acompressor` (normalize dynamics)
+5. Output `voice_clean.wav` for Whisper and ffmpeg dimension analysis
 
 ## Transcript Analysis Integration
 
@@ -112,12 +121,13 @@ Whisper (`small` model) produces the `.srt` transcript. The **transcript-analyze
 
 **What the transcript-analyzer scores:** Defined by the active style's `transcript_signals` field. For the `clean` style: humor, dramatic reactions, surprised exclamations, banter, storytelling peaks, emotional outbursts, comedic timing.
 
-**When Transcript is active**, weights shift from Minimal Tier:
-- Volume: 0.20 → 0.175 (-0.025)
-- High Freq: 0.25 → 0.225 (-0.025)
-- Dynamic Range: 0.15 → 0.125 (-0.025)
-- Transcript: 0.00 → 0.075 (+0.075)
-- Visual and Breadth: unchanged
+**When Transcript is active**, weights shift from Minimal Tier to Full Tier:
+- Volume: 0.30 → 0.25 (-0.05)
+- High Freq: 0.25 → 0.20 (-0.05)
+- Crosstalk: 0.20 → 0.15 (-0.05)
+- Breadth: 0.10 → 0.15 (+0.05)
+- Transcript: 0.00 → 0.10 (+0.10)
+- Tension-Release: unchanged at 0.15
 
-**When Transcript is inactive** (no Whisper, empty transcript, or style lacks `transcript_signals`):
+**When Transcript is inactive** (no Whisper output, empty transcript, or style lacks `transcript_signals`):
 Scoring uses the Minimal Tier formula. Breadth counts 4 dimensions.
