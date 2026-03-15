@@ -34,7 +34,7 @@ If installation succeeds, verify by running:
 whisper --help
 ```
 
-If `whisper` CLI works, report: "Whisper installed successfully. The small model (~466MB) will download automatically on first use."
+If `whisper` CLI works, report: "Whisper installed successfully. The base model (~74MB) will download automatically on first use."
 
 If installation fails, report the error and tell the user: "Whisper installation failed. The plugin will use volume-based analysis only. You can retry later with /gameplay-setup."
 

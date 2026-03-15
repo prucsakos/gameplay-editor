@@ -18,7 +18,6 @@ You receive:
 - **style**: parsed YAML object from a style preset (transitions, etc.)
 - **platform**: `youtube` or `tiktok` — determines aspect ratio, LUFS, output format
 - **output_path**: where to save the final video(s)
-- **transcript_path** (optional): path to .srt file from Whisper (for captions)
 - **noise_floor_db** (optional): session-wide noise floor in dB, measured from a silent section of the source video by the audio-analyzer. If not provided, fall back to per-segment detection.
 - **source_width**, **source_height**, **source_fps**: from ffprobe (provided by calling command)
 
@@ -209,7 +208,6 @@ Return a structured report as a fenced JSON code block:
     "segment_extraction_ms": 82000,
     "audio_processing_ms": 65000,
     "transitions_ms": 12000,
-    "captions_ms": 0,
     "crop_export_ms": 34000
   }
 }

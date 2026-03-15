@@ -46,7 +46,7 @@ Score-threshold-based (not duration-based):
 
 Target platform is asked separately:
 - **youtube** — 16:9, single highlight reel
-- **tiktok** — 9:16, multiple individual short clips (15-60s each), auto-captions
+- **tiktok** — 9:16, multiple individual short clips (15-60s each)
 - **both** — exports both formats from the same moments
 
 ## Detection
@@ -59,5 +59,5 @@ Audio + visual analysis scores moments by:
 - Simultaneous speakers / crosstalk (10%)
 
 Two tiers:
-- **Full** (Whisper installed, default): transcription + all signals + captions
-- **Minimal** (ffmpeg only): volume + visual motion based detection, no captions
+- **Full** (Whisper installed, default): transcription + all signals
+- **Minimal** (ffmpeg only): volume + visual motion based detection

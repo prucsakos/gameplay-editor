@@ -39,7 +39,7 @@ From the user's input, extract:
 
 ## Check Whisper Availability
 
-Run `whisper --help` quietly. If it works, report: `"Running with Whisper (Full tier) — transcription + visual analysis + laughter detection + captions"`
+Run `whisper --help` quietly. If it works, report: `"Running with Whisper (Full tier) — transcription + laughter detection"`
 If not: `"Whisper not available — using volume-based analysis only (Minimal tier). Run /gameplay-setup for better results."`
 
 ## Single Prompt (analyze mode only)
@@ -148,7 +148,6 @@ Dispatch the **edit-assembler** agent with:
 - The style preset parameters (from YAML frontmatter)
 - platform: `youtube` or `tiktok`
 - output_path
-- transcript_path (if available)
 - noise_floor_db (from analyzer output)
 - source_width, source_height, source_fps
 
@@ -185,7 +184,6 @@ Timing:
   Segment extraction:  <extraction time>
   Audio processing:    <audio_processing time>
   Transitions:         <transitions time>
-  Captions:            <captions time>  (only for tiktok)
   Crop & export:       <crop_export time>
   ─────────────────────────
   Total:               <total time>

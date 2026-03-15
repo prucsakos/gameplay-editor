@@ -11,7 +11,7 @@ Before installing this plugin, make sure you have these on your system:
 | **[Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview)** | Yes | Plugin host — this is a Claude Code plugin |
 | **[ffmpeg](https://ffmpeg.org/download.html)** | Yes | All video/audio processing |
 | **Python 3.8+** | No (recommended) | Required only for Whisper transcription |
-| **[openai-whisper](https://github.com/openai/whisper)** | No (recommended) | Better moment detection, auto-captions |
+| **[openai-whisper](https://github.com/openai/whisper)** | No (recommended) | Better moment detection via transcription |
 | **[PyTorch](https://pytorch.org/)** | No (auto-installed with Whisper) | Hard dependency of Whisper — installed automatically via `pip install openai-whisper`. For GPU acceleration, install the CUDA build from [pytorch.org](https://pytorch.org/get-started/locally/) |
 
 Verify ffmpeg is available:
@@ -57,7 +57,7 @@ After installing, run the one-time setup command to verify dependencies and opti
 /gameplay-setup
 ```
 
-This checks that ffmpeg is in your PATH and walks you through installing openai-whisper if Python is available. Whisper is optional but enables the **Full tier** of detection (transcription, captions). Without it, the plugin falls back to the **Minimal tier** (volume + visual motion only).
+This checks that ffmpeg is in your PATH and walks you through installing openai-whisper if Python is available. Whisper is optional but enables the **Full tier** of detection (transcription + emotion analysis). Without it, the plugin falls back to the **Minimal tier** (volume + visual motion only).
 
 ## Usage
 
@@ -91,7 +91,7 @@ The plugin uses **score-based selection** instead of targeting a specific output
 Target platform is separate from clip selection:
 
 - **youtube** — 16:9 original aspect ratio, single highlight reel
-- **tiktok** — 9:16 center crop, multiple individual short clips (15-60s), auto-captions, louder audio for mobile
+- **tiktok** — 9:16 center crop, multiple individual short clips (15-60s), louder audio for mobile
 - **both** — exports both formats from the same moments
 
 ## How It Works
@@ -103,7 +103,7 @@ Target platform is separate from clip selection:
 5. Returns ALL moments with detailed audio/screen/transcript descriptions
 6. Filters by score threshold (or duration target) with user approval
 7. Processes audio: noise reduction (from silent-section noise floor), normalization, compression, game audio leveling
-8. Assembles the edit with ffmpeg (transitions, crop, captions)
+8. Assembles the edit with ffmpeg (transitions, crop)
 9. Exports MP4 with score in filenames and a pipeline timing summary
 
 ## Plugin Structure

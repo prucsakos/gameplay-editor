@@ -57,11 +57,11 @@ If available:
 2. Run Whisper with the specified language. **Important:** Set `PYTHONIOENCODING=utf-8` to ensure correct character encoding for languages with non-ASCII characters (e.g., Hungarian á, é, ő, ű):
    ```bash
    START_WHISPER=$(date +%s%N)
-   PYTHONIOENCODING=utf-8 whisper "<tmp_dir>/voice.wav" --model small --language <language> --output_format all --output_dir "<tmp_dir>/"
+   PYTHONIOENCODING=utf-8 whisper "<tmp_dir>/voice.wav" --model base --language <language> --output_format srt --output_dir "<tmp_dir>/"
    END_WHISPER=$(date +%s%N)
    WHISPER_MS=$(( (END_WHISPER - START_WHISPER) / 1000000 ))
    ```
-   This produces `voice.srt`, `voice.json`, `voice.txt`.
+   This produces `voice.srt`.
 
 3. **Verify encoding:** Check that the output files are valid UTF-8:
    ```bash
@@ -71,7 +71,7 @@ If available:
    ```bash
    python3 -c "
    import codecs, sys
-   for ext in ['srt', 'txt', 'json']:
+   for ext in ['srt']:
        path = '<tmp_dir>/voice.' + ext
        try:
            with open(path, 'r', encoding='utf-8') as f: f.read()
@@ -83,7 +83,6 @@ If available:
    ```
 
 4. Parse `voice.srt` for segment-level timestamps and text.
-5. Parse `voice.json` for word-level timing (needed for captions).
 
 **When reading Whisper output files**, always open them with explicit `encoding='utf-8'`. On Windows, the default encoding may not be UTF-8.
 
@@ -239,7 +238,7 @@ Return a structured list. Print it as a fenced JSON code block so the calling co
   "session_mean": 42.3,
   "session_stddev": 18.7,
   "noise_floor_db": -62.3,
-  "transcript_path": "<tmp_dir>/voice.srt",
+  "transcript_srt": "<tmp_dir>/voice.srt",
   "timing": {
     "audio_probe_ms": 4200,
     "whisper_ms": 758000,
