@@ -39,8 +39,16 @@ From the user's input, extract:
 
 ## Check Whisper Availability
 
-Run `whisper --help` quietly. If it works, report: `"Running with Whisper (Full tier) — transcription + laughter detection"`
-If not: `"Whisper not available — using volume-based analysis only (Minimal tier). Run /gameplay-setup for better results."`
+First check for faster-whisper (preferred, ~4x faster):
+```bash
+python3 -c "from faster_whisper import WhisperModel; print('ok')" 2>&1
+```
+
+If that works, report: `"Running with faster-whisper (Full tier) — transcription + laughter detection"`
+
+If not, fall back to legacy whisper CLI: `whisper --help`. If that works, report: `"Running with Whisper (Full tier) — transcription + laughter detection"`
+
+If neither is available: `"Whisper not available — using volume-based analysis only (Minimal tier). Run /gameplay-setup for better results."`
 
 ## Single Prompt (analyze mode only)
 

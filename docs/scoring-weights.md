@@ -115,9 +115,10 @@ Removing Visual and DynRange and restoring these four audio-only dimensions reco
 
 ## Transcript Analysis Integration
 
-Whisper (`small` model) produces the `.srt` transcript. The **transcript-analyzer** agent reads it to produce the Transcript dimension.
+faster-whisper (`small` model, INT8 quantization) produces the `.srt` transcript. The **transcript-analyzer** agent reads it to produce the Transcript dimension. Falls back to openai-whisper CLI if faster-whisper is not installed.
 
 **Model:** `small` (chosen over `base` for better accuracy on long recordings with game audio bleed).
+**Engine:** faster-whisper (CTranslate2) — ~4x faster than openai-whisper with identical accuracy and ~50% less VRAM via INT8 quantization.
 
 **What the transcript-analyzer scores:** Defined by the active style's `transcript_signals` field. For the `clean` style: humor, dramatic reactions, surprised exclamations, banter, storytelling peaks, emotional outbursts, comedic timing.
 

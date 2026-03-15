@@ -1,6 +1,6 @@
 # Gameplay Editor
 
-A Claude Code plugin that transforms long gameplay recordings into highlight reels and short-form clips using AI-powered audio + visual analysis.
+A Claude Code plugin that transforms long gameplay recordings into highlight reels and short-form clips using AI-powered audio analysis and transcript understanding.
 
 ## Prerequisites
 
@@ -11,8 +11,8 @@ Before installing this plugin, make sure you have these on your system:
 | **[Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview)** | Yes | Plugin host — this is a Claude Code plugin |
 | **[ffmpeg](https://ffmpeg.org/download.html)** | Yes | All video/audio processing |
 | **Python 3.8+** | No (recommended) | Required only for Whisper transcription |
-| **[openai-whisper](https://github.com/openai/whisper)** | No (recommended) | Better moment detection via transcription |
-| **[PyTorch](https://pytorch.org/)** | No (auto-installed with Whisper) | Hard dependency of Whisper — installed automatically via `pip install openai-whisper`. For GPU acceleration, install the CUDA build from [pytorch.org](https://pytorch.org/get-started/locally/) |
+| **[faster-whisper](https://github.com/SYSTRAN/faster-whisper)** | No (recommended) | ~4x faster transcription via CTranslate2 with INT8 quantization. Lower VRAM usage than openai-whisper. |
+| **[PyTorch](https://pytorch.org/)** | No (auto-installed with faster-whisper) | Hard dependency — installed automatically via `pip install faster-whisper`. For GPU acceleration, install the CUDA build from [pytorch.org](https://pytorch.org/get-started/locally/) |
 
 Verify ffmpeg is available:
 
@@ -57,7 +57,7 @@ After installing, run the one-time setup command to verify dependencies and opti
 /gameplay-setup
 ```
 
-This checks that ffmpeg is in your PATH and walks you through installing openai-whisper if Python is available. Whisper is optional but enables the **Full tier** of detection (transcription + emotion analysis). Without it, the plugin falls back to the **Minimal tier** (volume + visual motion only).
+This checks that ffmpeg is in your PATH and walks you through installing faster-whisper if Python is available. Whisper is optional but enables the **Full tier** of detection (transcription + excitement analysis). Without it, the plugin falls back to the **Minimal tier** (volume-based analysis only).
 
 ## Usage
 
@@ -84,7 +84,7 @@ The plugin uses **score-based selection** instead of targeting a specific output
 
 - **Default**: Include all moments scoring ≥ 70 (configurable via `--score-threshold`)
 - **Duration mode**: If `--duration` is provided, selects the highest-scoring moments that fit within the target
-- **Analyze mode**: Shows ALL detected moments with detailed descriptions (audio, screen, transcript). You choose which to include by adjusting the threshold or cherry-picking.
+- **Analyze mode**: Shows ALL detected moments with detailed descriptions (audio, transcript). You choose which to include by adjusting the threshold or cherry-picking.
 
 ## Platforms
 
@@ -97,10 +97,10 @@ Target platform is separate from clip selection:
 ## How It Works
 
 1. Probes audio tracks to find voice vs. game audio
-2. Runs Whisper transcription with specified language (falls back to volume analysis if unavailable)
-3. Analyzes visual motion via scene detection and frame difference
-4. Scores 5-second windows by: laughter/screaming (30%), drama (25%), volume spikes (20%), visual motion (15%), crosstalk (10%)
-5. Returns ALL moments with detailed audio/screen/transcript descriptions
+2. Preprocesses voice audio (noise suppression, EQ, compression)
+3. Runs faster-whisper transcription with specified language (falls back to volume analysis if unavailable)
+4. Scores 5-second windows by: volume spikes (25-30%), laughter/screaming via HF energy (20-25%), crosstalk (15-20%), tension-release (15%), breadth bonus (10-15%), transcript excitement (10%)
+5. Returns ALL moments with detailed audio + transcript descriptions
 6. Filters by score threshold (or duration target) with user approval
 7. Processes audio: noise reduction (from silent-section noise floor), normalization, compression, game audio leveling
 8. Assembles the edit with ffmpeg (transitions, crop)

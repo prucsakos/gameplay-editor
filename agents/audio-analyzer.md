@@ -97,48 +97,60 @@ Report timing: `"preprocessing_ms": <PREPROC_MS>`
 
 ## Stage 3: Whisper Transcription (uses cleaned audio)
 
-Check if `whisper` CLI is available by running `whisper --help`.
+Check if `faster-whisper` is available:
+```bash
+python3 -c "from faster_whisper import WhisperModel; print('ok')" 2>&1
+```
 
 If available:
 
-1. Run Whisper with the specified language. **Important:** Set `PYTHONIOENCODING=utf-8` to ensure correct character encoding for languages with non-ASCII characters (e.g., Hungarian á, é, ő, ű):
+1. Run faster-whisper via a Python script. faster-whisper uses CTranslate2 for ~4x speedup over the original whisper CLI with identical accuracy and lower VRAM usage (INT8 quantization):
    ```bash
    START_WHISPER=$(date +%s%N)
-   PYTHONIOENCODING=utf-8 whisper "<tmp_dir>/voice_clean.wav" --model small --language <language> --output_format srt --output_dir "<tmp_dir>/"
+   python3 -c "
+   import sys, os
+   sys.stdout.reconfigure(encoding='utf-8')
+   from faster_whisper import WhisperModel
+
+   model = WhisperModel('small', device='auto', compute_type='int8')
+   segments, info = model.transcribe('<tmp_dir>/voice_clean.wav', language='<language>', beam_size=5)
+
+   srt_path = os.path.join('<tmp_dir>', 'voice.srt')
+   with open(srt_path, 'w', encoding='utf-8') as f:
+       for i, seg in enumerate(segments, 1):
+           start_h, start_r = divmod(seg.start, 3600)
+           start_m, start_s = divmod(start_r, 60)
+           end_h, end_r = divmod(seg.end, 3600)
+           end_m, end_s = divmod(end_r, 60)
+           f.write(f'{i}\n')
+           f.write(f'{int(start_h):02d}:{int(start_m):02d}:{start_s:06.3f} --> {int(end_h):02d}:{int(end_m):02d}:{end_s:06.3f}\n'.replace('.', ','))
+           f.write(f'{seg.text.strip()}\n\n')
+
+   print(f'Transcribed {i} segments, language={info.language}, prob={info.language_probability:.2f}')
+   "
    END_WHISPER=$(date +%s%N)
    WHISPER_MS=$(( (END_WHISPER - START_WHISPER) / 1000000 ))
    ```
-   This produces `voice_clean.srt`. Rename it to `voice.srt`:
-   ```bash
-   mv "<tmp_dir>/voice_clean.srt" "<tmp_dir>/voice.srt"
-   ```
+   This produces `voice.srt` directly (no rename needed). The output is always UTF-8.
 
-2. **Verify encoding:** Check that the output files are valid UTF-8:
-   ```bash
-   python3 -c "open('<tmp_dir>/voice.srt', encoding='utf-8').read()" 2>&1
-   ```
-   If this fails, the files may be in a different encoding (e.g., latin-1 on Windows). Convert them:
-   ```bash
-   python3 -c "
-   import codecs, sys
-   for ext in ['srt']:
-       path = '<tmp_dir>/voice.' + ext
-       try:
-           with open(path, 'r', encoding='utf-8') as f: f.read()
-       except UnicodeDecodeError:
-           with open(path, 'r', encoding='latin-1') as f: content = f.read()
-           with open(path, 'w', encoding='utf-8') as f: f.write(content)
-           print(f'Converted {path} from latin-1 to utf-8')
-   "
-   ```
+   **Key faster-whisper options used:**
+   - `device='auto'` — uses GPU (CUDA) if available, falls back to CPU
+   - `compute_type='int8'` — INT8 quantization for ~50% less VRAM and faster inference
+   - `beam_size=5` — same as default openai-whisper for equivalent accuracy
 
-3. Parse `voice.srt` for segment-level timestamps and text.
+2. Parse `voice.srt` for segment-level timestamps and text.
 
 **When reading Whisper output files**, always open them with explicit `encoding='utf-8'`. On Windows, the default encoding may not be UTF-8.
 
-If Whisper is not available, skip this stage and note: `"Whisper unavailable, using Minimal tier."`
+**Fallback:** If faster-whisper is not available, check for the legacy `whisper` CLI (`whisper --help`). If available, use it as fallback:
+```bash
+PYTHONIOENCODING=utf-8 whisper "<tmp_dir>/voice_clean.wav" --model small --language <language> --output_format srt --output_dir "<tmp_dir>/"
+mv "<tmp_dir>/voice_clean.srt" "<tmp_dir>/voice.srt"
+```
 
-If Whisper starts but fails mid-run (non-zero exit code), check how much of the `.srt` was produced. Report: `"Whisper failed at approximately <last_timestamp>. Using partial transcript + Minimal tier for remaining duration."` Use whatever transcript was generated for the covered portion, and fall back to Minimal tier scoring for the rest.
+If neither faster-whisper nor the whisper CLI is available, skip this stage and note: `"Whisper unavailable, using Minimal tier."`
+
+If transcription starts but fails mid-run (non-zero exit code), check how much of the `.srt` was produced. Report: `"Whisper failed at approximately <last_timestamp>. Using partial transcript + Minimal tier for remaining duration."` Use whatever transcript was generated for the covered portion, and fall back to Minimal tier scoring for the rest.
 
 Report timing: `"whisper_ms": <WHISPER_MS>`
 

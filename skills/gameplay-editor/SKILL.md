@@ -22,8 +22,8 @@ This skill delegates to two commands and two agents:
 1. **`/gameplay-setup`** — One-time setup (install Whisper, verify ffmpeg)
 2. **`/gameplay-edit <path>`** — Main workflow:
    - Prompts for language, platform, and score threshold
-   - **audio-analyzer agent** detects and scores ALL moments via audio + visual analysis
-   - In analyze mode: presents ALL moments with detailed descriptions (audio + screen + transcript), marks ones above threshold
+   - **audio-analyzer agent** detects and scores ALL moments via audio analysis
+   - In analyze mode: presents ALL moments with detailed descriptions (audio + transcript), marks ones above threshold
    - User can approve, adjust threshold, or set a target duration to filter by top scores
    - **edit-assembler agent** processes audio and exports the final video
 
@@ -51,13 +51,15 @@ Target platform is asked separately:
 
 ## Detection
 
-Audio + visual analysis scores moments by:
-- Laughter/screaming via high-frequency energy (30%)
-- Drama detection: silence→noise + transcript emotion (25%)
-- Voice volume spikes (20%)
-- Visual motion: scene changes + frame difference (15%)
-- Simultaneous speakers / crosstalk (10%)
+Pure audio analysis scores moments by:
+- Voice volume spikes (25-30%)
+- Laughter/screaming via high-frequency energy (20-25%)
+- Simultaneous speakers / crosstalk (15-20%)
+- Tension-release: silence→explosion patterns (15%)
+- Signal breadth bonus (10-15%)
+- Transcript excitement via LLM analysis (10%, Full tier only)
+- Exclamation bonus from transcript (`!`, ALL CAPS, repeated letters)
 
 Two tiers:
-- **Full** (Whisper installed, default): transcription + all signals
-- **Minimal** (ffmpeg only): volume + visual motion based detection
+- **Full** (faster-whisper installed, default): transcription + all signals + transcript-analyzer
+- **Minimal** (ffmpeg only): volume + audio signal based detection

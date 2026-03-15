@@ -21,26 +21,34 @@ Run `python --version` or `python3 --version`. If neither works, tell the user:
 "Python 3.8+ is required for Whisper transcription. Install from python.org. Without Python, the plugin will use volume-based analysis only (reduced accuracy)."
 Continue even if Python is missing — it is optional.
 
-## Step 3: Install openai-whisper
+## Step 3: Install faster-whisper
 
-If Python is available, run:
+If Python is available, install faster-whisper (CTranslate2-based, ~4x faster than openai-whisper with identical accuracy and lower VRAM usage):
 ```bash
-pip install openai-whisper
+pip install faster-whisper
 ```
-Or `pip3 install openai-whisper` if `pip` is not available.
+Or `pip3 install faster-whisper` if `pip` is not available.
 
 If installation succeeds, verify by running:
 ```bash
-whisper --help
+python3 -c "from faster_whisper import WhisperModel; print('faster-whisper OK')"
 ```
 
-If `whisper` CLI works, report: "Whisper installed successfully. The base model (~74MB) will download automatically on first use."
+If that works, report: "faster-whisper installed successfully. The small model (~461MB) will download automatically on first use."
 
-If installation fails, report the error and tell the user: "Whisper installation failed. The plugin will use volume-based analysis only. You can retry later with /gameplay-setup."
+If faster-whisper installation fails, fall back to openai-whisper:
+```bash
+pip install openai-whisper
+```
+Verify: `whisper --help`
+
+If the fallback works, report: "openai-whisper installed as fallback. Consider installing faster-whisper for ~4x speed improvement."
+
+If both fail, report: "Whisper installation failed. The plugin will use volume-based analysis only. You can retry later with /gameplay-setup."
 
 ## Step 3b: Verify PyTorch and CUDA
 
-PyTorch (torch) is a hard dependency of openai-whisper — Whisper cannot run without it. If Whisper installed successfully, torch is already present. Verify and check GPU availability:
+PyTorch (torch) is a dependency of both faster-whisper and openai-whisper. If either installed successfully, torch is already present. Verify and check GPU availability:
 
 ```bash
 python -c "import torch; print(f'PyTorch {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}'); print(f'GPU: {torch.cuda.get_device_name(0)}' if torch.cuda.is_available() else 'GPU: none (CPU mode)')"
@@ -61,5 +69,5 @@ Report the final status:
 - Python: OK (<version>) / MISSING (optional)
 - PyTorch: OK (<version>) / NOT INSTALLED (optional)
 - CUDA/GPU: OK (<GPU name>) / CPU-only / N/A
-- Whisper: OK / NOT INSTALLED (optional)
+- Whisper: OK (faster-whisper) / OK (openai-whisper fallback) / NOT INSTALLED (optional)
 - Detection tier: Full (with Whisper) / Minimal (ffmpeg only)
