@@ -31,6 +31,16 @@ You receive:
 
 2. Check available disk space. Warn if less than 2GB free.
 
+3. Detect NVENC (hardware encoder):
+   ```bash
+   ffmpeg -hide_banner -encoders 2>&1 | grep h264_nvenc
+   ```
+   If `h264_nvenc` is found, set `HW_ENC=1`. All encoding steps below use NVENC when available, falling back to `libx264` otherwise.
+
+   **NVENC vs libx264:**
+   - NVENC: ~3-5x faster encoding via GPU ASIC, frees CPU for other work. Slightly lower quality-per-bitrate (~5-10%) — invisible after YouTube/TikTok re-encode.
+   - libx264: Better quality-per-bitrate, but CPU-bound and slower.
+
 ## Step 1: Extract Segments
 
 For each moment in the list:
@@ -43,6 +53,13 @@ END_EXTRACT=$(date +%s%N)
 ```
 
 **If style.transitions is `fade` OR platform is `tiktok` (re-encode needed for filters):**
+
+With NVENC (`HW_ENC=1`):
+```bash
+ffmpeg -ss <start> -to <end> -i "<source_video_path>" -c:v h264_nvenc -preset p4 -cq <style.export_quality number> -c:a aac -b:a 192k -y "$TMP/segment_<N>.mp4"
+```
+
+Fallback (no NVENC):
 ```bash
 ffmpeg -ss <start> -to <end> -i "<source_video_path>" -c:v libx264 -crf <style.export_quality number> -c:a aac -b:a 192k -y "$TMP/segment_<N>.mp4"
 ```
@@ -116,9 +133,17 @@ Track cumulative audio processing time as `audio_processing_ms`.
 
 **If `fade`:**
 For each segment, apply fade-in at start and fade-out at end:
+
+With NVENC (`HW_ENC=1`):
 ```bash
 START_FX=$(date +%s%N)
-ffmpeg -i "$TMP/mixed_<N>.mp4" -vf "fade=t=in:d=<style.transition_duration>,fade=t=out:st=<duration - transition_duration>:d=<style.transition_duration>" -c:a copy -y "$TMP/faded_<N>.mp4"
+ffmpeg -i "$TMP/mixed_<N>.mp4" -vf "fade=t=in:d=<style.transition_duration>,fade=t=out:st=<duration - transition_duration>:d=<style.transition_duration>" -c:v h264_nvenc -preset p4 -cq <style.export_quality number> -c:a copy -y "$TMP/faded_<N>.mp4"
+```
+
+Fallback (no NVENC):
+```bash
+START_FX=$(date +%s%N)
+ffmpeg -i "$TMP/mixed_<N>.mp4" -vf "fade=t=in:d=<style.transition_duration>,fade=t=out:st=<duration - transition_duration>:d=<style.transition_duration>" -c:v libx264 -crf <style.export_quality number> -c:a copy -y "$TMP/faded_<N>.mp4"
 ```
 
 **If `cut`:**
@@ -141,10 +166,19 @@ crop_x = (source_width - crop_width) / 2
 ```
 
 For each segment:
+
+With NVENC (`HW_ENC=1`):
 ```bash
 ffmpeg -i "$TMP/segment_<N>.mp4" \
   -vf "crop=<crop_width>:<crop_height>:<crop_x>:0,scale=1080:1920" \
-  -c:a copy -y "$TMP/cropped_<N>.mp4"
+  -c:v h264_nvenc -preset p4 -cq <style.export_quality number> -c:a copy -y "$TMP/cropped_<N>.mp4"
+```
+
+Fallback (no NVENC):
+```bash
+ffmpeg -i "$TMP/segment_<N>.mp4" \
+  -vf "crop=<crop_width>:<crop_height>:<crop_x>:0,scale=1080:1920" \
+  -c:v libx264 -crf <style.export_quality number> -c:a copy -y "$TMP/cropped_<N>.mp4"
 ```
 
 #### 4b: TikTok High-Stimulus Pacing
