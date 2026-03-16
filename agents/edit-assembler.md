@@ -47,7 +47,12 @@ All `python3`/`python` invocations MUST be prefixed with `PYTHONUTF8=1`. Avoid n
        curl -sL "https://github.com/richardpl/arnndn-models/raw/master/sh.rnnn" -o "$HOME/.cache/gameplay-editor/sh.rnnn"
        ```
      - Store the resolved absolute path as `<rnnoise_model>`.
-     - **Windows path escaping:** ffmpeg filter strings use `:` as a parameter separator. On Windows, drive letters contain `:` (e.g., `C:/Users/...`). Escape the colon in the model path: `C\:/Users/...`. Apply this escaping when substituting `<rnnoise_model>` into `-af` or `-filter_complex` strings.
+     - **Windows path escaping:** Prepare the escaped model path for use in filter script files:
+       ```bash
+       RNNOISE_WIN=$(cygpath -m "$HOME/.cache/gameplay-editor/sh.rnnn")
+       RNNOISE_ESC=$(echo "$RNNOISE_WIN" | sed "s|:|\\\\:|")
+       ```
+       Then use `$RNNOISE_ESC` when writing filter strings to temp files (see fallback commands below). Filter files use `arnndn=m='<escaped_path>'` with single-quote wrapping, passed via `-filter_script:a` or `-filter_complex_script` to bypass both shell mangling and ffmpeg's command-line colon parsing.
 
 4. Determine platform LUFS target:
    - YouTube: `-16`
@@ -61,18 +66,44 @@ For each moment, build a **single ffmpeg command** that extracts, processes audi
 
 ### Audio filter chain
 
+**Noise gate threshold:** Compute from `noise_floor_db` (provided as input):
+```
+gate_threshold = 10^((noise_floor_db + 6) / 20)
+```
+This sets the gate 6 dB above the measured noise floor. Round to 4 decimal places. Example: noise floor = -45 dB → threshold = `10^(-39/20)` ≈ `0.0112`.
+
 **When `full_audio_clean_path` is provided (pre-denoised — default path):**
 ```
-afade=t=in:d=0.05,loudnorm=I=<platform_lufs>:LRA=11:TP=-1.5,acompressor=threshold=0.1:ratio=4:attack=5:release=50,afade=t=out:st=<segment_duration-0.05>:d=0.05
+highpass=f=80,afade=t=in:d=0.05,loudnorm=I=<platform_lufs>:LRA=11:TP=-1.5,agate=threshold=<gate_threshold>:range=0.06:attack=5:release=150:hold=25,acompressor=threshold=0.1:ratio=3:attack=10:release=100:knee=2.83,afade=t=out:st=<segment_duration-0.05>:d=0.05
 ```
 RNNoise is omitted — noise was already removed from the full track in Step 0, eliminating cold-start artifacts.
 
 **When `full_audio_clean_path` is NOT provided (fallback — per-segment denoising):**
 ```
-afade=t=in:d=0.05,arnndn=m=<rnnoise_model>,loudnorm=I=<platform_lufs>:LRA=11:TP=-1.5,acompressor=threshold=0.1:ratio=4:attack=5:release=50,afade=t=out:st=<segment_duration-0.05>:d=0.05
+highpass=f=80,afade=t=in:d=0.05,arnndn=m=<rnnoise_model>,loudnorm=I=<platform_lufs>:LRA=11:TP=-1.5,agate=threshold=<gate_threshold>:range=0.06:attack=5:release=150:hold=25,acompressor=threshold=0.1:ratio=3:attack=10:release=100:knee=2.83,afade=t=out:st=<segment_duration-0.05>:d=0.05
 ```
 
-The 50ms fade-in and fade-out eliminates click/pop artifacts at segment boundaries.
+**Filter chain rationale (in order):**
+
+1. `highpass=f=80` — Removes sub-80Hz rumble (PC fans, mic handling, room resonance) before any amplification. Prevents loudnorm from wasting headroom on inaudible low-frequency energy.
+
+2. `afade=t=in:d=0.05` — 50ms fade-in eliminates click/pop artifacts at segment boundaries.
+
+3. `loudnorm` — Normalizes to platform LUFS target. Goes before the gate so the gate threshold operates on consistent levels regardless of source volume.
+
+4. `agate` — Suppresses the noise floor that loudnorm amplification makes audible.
+   - `range=0.06` (~24 dB attenuation) — gentler than full silence; preserves natural room tone so quiet sections don't feel like a vacuum.
+   - `release=150ms` — slow enough to avoid "breathing" artifacts where the gate flutters during natural speech pauses.
+   - `hold=25ms` — holds the gate open 25ms after signal drops below threshold, preventing flutter on word-final consonants.
+   - `attack=5ms` — fast enough to catch speech onset without clipping initial consonants.
+
+5. `acompressor` — Evens out loud/quiet speech dynamics.
+   - `ratio=3:1` — moderate compression preserves natural vocal dynamics (4:1 was over-compressing, making speech sound flat).
+   - `attack=10ms` — slower attack preserves consonant transients (plosives like "p", "t", "k") that give speech clarity and punch.
+   - `release=100ms` — smooth recovery avoids pumping artifacts on rapid volume changes.
+   - `knee=2.83` — soft knee (~6 dB range) for gradual compression onset instead of an abrupt threshold transition.
+
+6. `afade=t=out` — 50ms fade-out at segment end.
 
 ### Video filter chain
 
@@ -110,11 +141,15 @@ ffmpeg -ss <start> -to <end> -i "<source_video_path>" \
 ```
 
 **When `full_audio_clean_path` is NOT provided (fallback):**
+The audio filter chain includes `arnndn`, so write it to a filter script file to handle Windows path escaping:
 ```bash
 START_PROCESS=$(date +%s%N)
-ffmpeg -ss <start> -to <end> -i "<source_video_path>" \
+# Write audio filter chain to file (contains arnndn with Windows path)
+printf "highpass=f=80,afade=t=in:d=0.05,arnndn=m='%s',loudnorm=I=<platform_lufs>:LRA=11:TP=-1.5,agate=threshold=<gate_threshold>:range=0.06:attack=5:release=150:hold=25,acompressor=threshold=0.1:ratio=3:attack=10:release=100:knee=2.83,afade=t=out:st=<segment_duration-0.05>:d=0.05" "$RNNOISE_ESC" > "$TMP/af_segment.txt"
+
+MSYS_NO_PATHCONV=1 ffmpeg -ss <start> -to <end> -i "<source_video_path>" \
   [-vf "<video_filters>"] \
-  -af "<audio_filters>" \
+  -filter_script:a "$TMP/af_segment.txt" \
   -c:v <codec> [-crf <quality>] -c:a aac -b:a 192k \
   -y "$TMP/segment_<N>.mp4"
 ```
@@ -132,7 +167,7 @@ ffmpeg -ss <start> -to <end> -i "<source_video_path>" \
   -ss <start> -to <end> -i "<voice_clean_path>" \
   [-vf "<video_filters>"] \
   -filter_complex \
-    "[1:a]afade=t=in:d=0.05,loudnorm=I=<platform_lufs>:LRA=11:TP=-1.5,acompressor=threshold=0.1:ratio=4:attack=5:release=50,afade=t=out:st=<dur-0.05>:d=0.05[voice]; \
+    "[1:a]highpass=f=80,afade=t=in:d=0.05,loudnorm=I=<platform_lufs>:LRA=11:TP=-1.5,agate=threshold=<gate_threshold>:range=0.06:attack=5:release=150:hold=25,acompressor=threshold=0.1:ratio=3:attack=10:release=100:knee=2.83,afade=t=out:st=<dur-0.05>:d=0.05[voice]; \
      [0:a:<game_index>]loudnorm=I=<game_lufs>:LRA=11:TP=-1.5[game]; \
      [voice][game]amix=inputs=2:duration=first[outa]" \
   -map 0:v -map "[outa]" \
@@ -141,13 +176,14 @@ ffmpeg -ss <start> -to <end> -i "<source_video_path>" \
 ```
 
 **When `voice_clean_paths` are NOT provided (fallback):**
+Write the filter_complex to a script file to handle Windows path escaping for `arnndn`:
 ```bash
-ffmpeg -ss <start> -to <end> -i "<source_video_path>" \
+# Write filter_complex to file (contains arnndn with Windows path)
+printf "[0:a:<voice_index>]highpass=f=80,afade=t=in:d=0.05,arnndn=m='%s',loudnorm=I=<platform_lufs>:LRA=11:TP=-1.5,agate=threshold=<gate_threshold>:range=0.06:attack=5:release=150:hold=25,acompressor=threshold=0.1:ratio=3:attack=10:release=100:knee=2.83,afade=t=out:st=<dur-0.05>:d=0.05[voice];[0:a:<game_index>]loudnorm=I=<game_lufs>:LRA=11:TP=-1.5[game];[voice][game]amix=inputs=2:duration=first[outa]" "$RNNOISE_ESC" > "$TMP/fc_segment.txt"
+
+MSYS_NO_PATHCONV=1 ffmpeg -ss <start> -to <end> -i "<source_video_path>" \
   [-vf "<video_filters>"] \
-  -filter_complex \
-    "[0:a:<voice_index>]afade=t=in:d=0.05,arnndn=m=<rnnoise_model>,loudnorm=I=<platform_lufs>:LRA=11:TP=-1.5,acompressor=threshold=0.1:ratio=4:attack=5:release=50,afade=t=out:st=<dur-0.05>:d=0.05[voice]; \
-     [0:a:<game_index>]loudnorm=I=<game_lufs>:LRA=11:TP=-1.5[game]; \
-     [voice][game]amix=inputs=2:duration=first[outa]" \
+  -filter_complex_script "$TMP/fc_segment.txt" \
   -map 0:v -map "[outa]" \
   -c:v <codec> [-crf <quality>] -c:a aac -b:a 192k \
   -y "$TMP/segment_<N>.mp4"

@@ -25,8 +25,7 @@ flowchart TD
         S0_MODEL --> S0_PROBE[Probe audio tracks<br/>Identify voice track index]
         S0_PROBE --> S0_MULTI{Multi-track?}
 
-        S0_MULTI -->|single track| S0_SINGLE[Extract & denoise voice track<br/><code>ffmpeg -i video -map 0:a:voice -ac 1 -ar 16000<br/>-af arnndn=m=model -y $TMP/voice_clean.wav</code>]
-        S0_SINGLE --> S0_FULL_AUDIO[Extract full denoised audio<br/><code>ffmpeg -i video -vn -af arnndn=m=model<br/>-c:a pcm_s16le -y $TMP/full_audio_clean.wav</code>]
+        S0_MULTI -->|single track| S0_SINGLE[Single-pass denoise with asplit<br/><code>ffmpeg -i video -filter_complex<br/>arnndn&#x2192;asplit&#x2192;[16kHz mono voice_clean.wav]<br/>&#x2003;&#x2003;&#x2003;&#x2003;&#x2003;&#x2003;&#x2003;&#x2003;&#x2192;[full-quality full_audio_clean.wav]</code><br/>One RNNoise pass produces both outputs]
 
         S0_MULTI -->|multi-track| S0_MULTI_EXT[Denoise each voice track<br/><code>ffmpeg ... -y $TMP/voice_N_clean.wav</code><br/>Game audio tracks: no denoising]
     end
@@ -110,10 +109,10 @@ flowchart TD
             EA_CLEAN_CHECK{full_audio_clean_path<br/>provided?}
 
             EA_CLEAN_CHECK -->|yes| EA_DUAL[Dual-input ffmpeg<br/>Video: source file<br/>Audio: clean WAV<br/>-map 0:v -map 1:a]
-            EA_DUAL --> EA_AF_CLEAN[Audio filters — no arnndn<br/>afade in → loudnorm → acompressor → afade out]
+            EA_DUAL --> EA_AF_CLEAN[Audio filters — no arnndn<br/>HPF 80Hz → afade in → loudnorm → agate → acompressor → afade out]
 
             EA_CLEAN_CHECK -->|no — fallback| EA_SINGLE[Single-input ffmpeg<br/>from source video]
-            EA_SINGLE --> EA_AF_ARNNDN[Audio filters — with arnndn<br/>afade in → arnndn → loudnorm → acompressor → afade out]
+            EA_SINGLE --> EA_AF_ARNNDN[Audio filters — with arnndn<br/>HPF 80Hz → afade in → arnndn → loudnorm → agate → acompressor → afade out]
 
             EA_AF_CLEAN --> EA_VF[Apply video filters<br/>platform crop, transitions, fade]
             EA_AF_ARNNDN --> EA_VF
@@ -164,4 +163,4 @@ flowchart TD
 
 ## Key Design Decision
 
-**RNNoise runs once on the full audio track in Step 0** before any agent is dispatched. This gives the neural network the entire recording to maintain continuous state — eliminating cold-start noise bursts that occurred when denoising short segments individually. All downstream stages (Whisper, energy scoring, segment assembly) use the pre-denoised audio.
+**RNNoise runs once on the full audio track in Step 0** before any agent is dispatched. This gives the neural network the entire recording to maintain continuous state — eliminating cold-start noise bursts that occurred when denoising short segments individually. For single-track sources, a single ffmpeg pass with `asplit` produces both the 16kHz mono voice WAV (for Whisper/scoring) and the full-quality denoised WAV (for assembly) from one RNNoise invocation. All downstream stages use the pre-denoised audio.

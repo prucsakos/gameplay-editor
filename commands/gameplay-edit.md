@@ -90,36 +90,46 @@ Before any analysis, denoise the entire voice track once. This eliminates RNNois
      curl -sL "https://github.com/richardpl/arnndn-models/raw/master/sh.rnnn" -o "$HOME/.cache/gameplay-editor/sh.rnnn"
      ```
    - Store the resolved absolute path as `<rnnoise_model>`.
-   - **Windows path escaping:** ffmpeg filter strings use `:` as a parameter separator. On Windows, drive letters contain `:` (e.g., `C:/Users/...`). Escape the colon in the model path: `C\:/Users/...`. Apply this escaping when substituting `<rnnoise_model>` into `-af` filter strings.
+   - **Windows path escaping:** ffmpeg's filter parser uses `:` as a parameter separator. On Windows, drive letters contain `:` (e.g., `C:/Users/...`) which breaks filter strings. Neither `\:` escaping on the command line nor `MSYS_NO_PATHCONV=1` reliably solves this due to Git Bash/MSYS2 path mangling interactions.
+   - **Reliable solution — `filter_complex_script`:** Write the filter string to a temp file, then pass it via `-filter_complex_script` (or `-filter_script:a` for simple `-af` chains). Inside the file, use single-quote escaping around the path: `arnndn=m='C\:/Users/...'`. This bypasses both shell mangling and ffmpeg's command-line parser:
+     ```bash
+     FILTER_FILE="$TMP/denoise_filter.txt"
+     # Get Windows-native path and escape the drive colon
+     RNNOISE_WIN=$(cygpath -m "$HOME/.cache/gameplay-editor/sh.rnnn")
+     RNNOISE_ESC=$(echo "$RNNOISE_WIN" | sed "s|:|\\\\:|")
+     # Write filter with single-quote wrapping
+     printf "arnndn=m='%s'" "$RNNOISE_ESC" > "$FILTER_FILE"
+     ```
+   - This pattern applies everywhere `arnndn` appears in a filter string (Step 0, edit-assembler fallback, multi-track voice processing).
 
 2. Probe audio tracks to identify the voice track index (same logic as audio-analyzer Stage 1 — use channel count and loudness heuristics). If only one audio track exists, use it.
 
-3. Extract and denoise the full voice track in a single ffmpeg pass:
+3. **Single-track audio:** Extract and denoise in a single ffmpeg pass that produces both outputs (16kHz mono for Whisper + full-quality for assembly) from one RNNoise invocation. Write the filter graph to a script file, then reference it:
    ```bash
-   ffmpeg -i "<video_path>" -map 0:a:<voice_index> -ac 1 -ar 16000 \
-     -af "arnndn=m=<rnnoise_model>" \
-     -y "$TMP/voice_clean.wav"
-   ```
-   This gives RNNoise the entire recording to maintain continuous state — no cold starts.
+   # Write filter_complex to file (avoids Windows colon escaping issues)
+   RNNOISE_WIN=$(cygpath -m "$HOME/.cache/gameplay-editor/sh.rnnn")
+   RNNOISE_ESC=$(echo "$RNNOISE_WIN" | sed "s|:|\\\\:|")
+   printf "[0:a:<voice_index>]arnndn=m='%s',asplit=2[a1][a2];[a1]aresample=16000,aformat=channel_layouts=mono[voice]" "$RNNOISE_ESC" > "$TMP/denoise_fc.txt"
 
-4. If multi-track audio (separate voice + game tracks), denoise each voice track:
+   MSYS_NO_PATHCONV=1 ffmpeg -i "<video_path>" \
+     -filter_complex_script "$TMP/denoise_fc.txt" \
+     -map "[voice]" -y "$TMP/voice_clean.wav" \
+     -map "[a2]" -c:a pcm_s16le -y "$TMP/full_audio_clean.wav"
+   ```
+   This runs RNNoise exactly once on the entire recording, then splits the denoised stream: one branch downsampled to 16kHz mono (for Whisper and energy scoring), the other at original quality (for segment assembly). Saves ~50% of Step 0 time compared to running arnndn twice.
+
+4. **Multi-track audio** (separate voice + game tracks): denoise each voice track individually. Each voice track still needs its own RNNoise pass since they're independent streams:
    ```bash
-   ffmpeg -i "<video_path>" -map 0:a:<voice_index_N> -ac 1 -ar 16000 \
-     -af "arnndn=m=<rnnoise_model>" \
+   # Write filter to file
+   printf "arnndn=m='%s'" "$RNNOISE_ESC" > "$TMP/denoise_af.txt"
+
+   MSYS_NO_PATHCONV=1 ffmpeg -i "<video_path>" -map 0:a:<voice_index_N> -ac 1 -ar 16000 \
+     -filter_script:a "$TMP/denoise_af.txt" \
      -y "$TMP/voice_N_clean.wav"
    ```
-   Game audio tracks do NOT need denoising.
+   Game audio tracks do NOT need denoising. The edit-assembler will reference these clean voice tracks directly during segment extraction.
 
-5. Also extract the full audio (all tracks, original format) with RNNoise applied to voice track(s) only, for use by the edit-assembler during segment extraction:
-   - **Single-track:**
-     ```bash
-     ffmpeg -i "<video_path>" -vn \
-       -af "arnndn=m=<rnnoise_model>" \
-       -c:a pcm_s16le -y "$TMP/full_audio_clean.wav"
-     ```
-   - **Multi-track:** Extract and denoise each voice track separately (as above). The edit-assembler will reference these clean tracks directly.
-
-6. Store paths: `voice_clean_path` = `$TMP/voice_clean.wav`, `full_audio_clean_path` = `$TMP/full_audio_clean.wav`
+5. Store paths: `voice_clean_path` = `$TMP/voice_clean.wav`, `full_audio_clean_path` = `$TMP/full_audio_clean.wav`
 
 Report: `"Step 0: Full-track noise reduction complete"`
 
@@ -301,6 +311,18 @@ Output clips (TikTok):
 ```
 
 For `platform=both`, show both summaries.
+
+## Cleanup
+
+After the pipeline summary is presented, remove the main temp directory (`$TMP`) which contains the intermediate audio files from Step 0:
+
+```bash
+rm -rf "$TMP"
+```
+
+This reclaims the disk space used by `voice_clean.wav`, `full_audio_clean.wav`, filter script files, and any other intermediates. For a 3-hour recording this is typically ~2-3 GB.
+
+If the pipeline failed before assembly completed, preserve `$TMP` and report its path for debugging (same policy as the edit-assembler's own temp cleanup).
 
 ## Error Handling
 
