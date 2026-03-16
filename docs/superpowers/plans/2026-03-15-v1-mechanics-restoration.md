@@ -170,7 +170,7 @@ Before Whisper and scoring, the voice track is cleaned:
 1. Extract voice track(s) to WAV
 2. Detect longest quiet section (`silencedetect`)
 3. Measure noise profile → `noise_floor_db`
-4. Apply: `afftdn` (noise reduction) → `highpass=80Hz` → `lowpass=12kHz` → `acompressor`
+4. Apply: `arnndn` (RNNoise noise reduction) → `highpass=80Hz` → `lowpass=12kHz` → `acompressor`
 5. Output: `voice_clean.wav` for all downstream stages
 
 ## Transcript Analysis Integration
@@ -261,11 +261,11 @@ Parse the average RMS level — this is the session-wide `noise_floor_db`.
 For each voice track:
 ```bash
 ffmpeg -i "<tmp_dir>/voice.wav" \
-  -af "afftdn=nf=<noise_floor_db>,highpass=f=80,lowpass=f=12000,acompressor=threshold=0.05:ratio=3:attack=5:release=50" \
+  -af "arnndn=m=<rnnoise_model>,highpass=f=80,lowpass=f=12000,acompressor=threshold=0.05:ratio=3:attack=5:release=50" \
   -y "<tmp_dir>/voice_clean.wav"
 ```
 
-- `afftdn=nf=<noise_floor_db>` — FFT-based noise reduction tuned to measured floor
+- `arnndn=m=<rnnoise_model>` — RNNoise neural network noise reduction (model at `$HOME/.cache/gameplay-editor/sh.rnnn`)
 - `highpass=f=80` — removes rumble/hum below 80Hz
 - `lowpass=f=12000` — removes hiss above speech range
 - `acompressor` — evens out quiet/loud speech

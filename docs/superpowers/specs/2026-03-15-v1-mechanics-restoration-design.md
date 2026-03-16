@@ -55,9 +55,9 @@ After track detection, before any analysis:
 3. Measure noise profile from the longest quiet section — this is the session-wide `noise_floor_db` (replaces the old Stage 4 noise floor measurement)
 4. Apply noise suppression + voice enhancement to each voice track:
    ```
-   afftdn=nf=<measured_floor> → highpass=f=80 → lowpass=f=12000 → acompressor=threshold=0.05:ratio=3:attack=5:release=50
+   arnndn=m=<rnnoise_model> → highpass=f=80 → lowpass=f=12000 → acompressor=threshold=0.05:ratio=3:attack=5:release=50
    ```
-   - `afftdn` — FFT-based noise reduction tuned to measured floor
+   - `arnndn` — RNNoise neural network noise reduction (replaces afftdn for better quality)
    - `highpass=80Hz` — removes rumble/hum
    - `lowpass=12kHz` — removes hiss above speech range
    - `acompressor` — evens out quiet/loud speech

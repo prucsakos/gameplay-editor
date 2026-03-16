@@ -1,6 +1,6 @@
 ---
-description: One-time setup for gameplay-editor — installs faster-whisper and verifies ffmpeg and CUDA
-allowed-tools: Bash(ffmpeg:*), Bash(ffprobe:*), Bash(pip:*), Bash(pip3:*), Bash(python:*), Bash(python3:*), Bash(where:*), Bash(which:*), Bash(ls:*), Bash(mkdir:*)
+description: One-time setup for gameplay-editor — installs faster-whisper, downloads RNNoise model, and verifies ffmpeg and CUDA
+allowed-tools: Bash(ffmpeg:*), Bash(ffprobe:*), Bash(pip:*), Bash(pip3:*), Bash(python:*), Bash(python3:*), Bash(where:*), Bash(which:*), Bash(ls:*), Bash(mkdir:*), Bash(curl:*)
 ---
 
 # Gameplay Editor Setup
@@ -21,7 +21,34 @@ Run `python --version` or `python3 --version`. If neither works, tell the user:
 "Python 3.8+ is required for faster-whisper transcription. Install from python.org. Without Python, the plugin will use volume-based analysis only (reduced accuracy)."
 Continue even if Python is missing — it is optional.
 
-## Step 3: Install faster-whisper
+## Step 3: Download RNNoise Model
+
+The audio pipeline uses ffmpeg's `arnndn` filter with an RNNoise neural network model for noise reduction.
+
+Check if the model exists:
+```bash
+ls "$HOME/.cache/gameplay-editor/sh.rnnn" 2>/dev/null && echo "RNNoise model: OK" || echo "MISSING"
+```
+
+If missing, download it:
+```bash
+mkdir -p "$HOME/.cache/gameplay-editor"
+curl -sL "https://github.com/richardpl/arnndn-models/raw/master/sh.rnnn" -o "$HOME/.cache/gameplay-editor/sh.rnnn"
+```
+
+Verify the download succeeded (file should be ~1MB):
+```bash
+ls -lh "$HOME/.cache/gameplay-editor/sh.rnnn"
+```
+
+Also verify ffmpeg supports the `arnndn` filter:
+```bash
+ffmpeg -filters 2>/dev/null | grep arnndn
+```
+
+If the filter is not found, tell the user: "Your ffmpeg build does not include the arnndn filter. Install a full build: winget install Gyan.FFmpeg (Windows), brew install ffmpeg (macOS), or apt install ffmpeg (Linux)."
+
+## Step 4: Install faster-whisper
 
 If Python is available, run:
 ```bash
@@ -39,7 +66,7 @@ If import works, report: "faster-whisper installed successfully. The small model
 
 If installation fails, report the error and tell the user: "faster-whisper installation failed. The plugin will use volume-based analysis only. You can retry later with /gameplay-setup."
 
-## Step 3b: Verify CUDA availability
+## Step 4b: Verify CUDA availability
 
 faster-whisper uses CTranslate2 as its backend. Check GPU availability:
 
@@ -69,11 +96,13 @@ Report the result:
 - If CUDA is available: "CUDA detected — faster-whisper will use GPU acceleration."
 - If CUDA is not available: "CPU-only mode — faster-whisper will run on CPU (slower but functional). For GPU acceleration, install CUDA toolkit and reinstall: pip install faster-whisper[cuda]"
 
-## Step 4: Summary
+## Step 5: Summary
 
 Report the final status:
 - ffmpeg: OK / MISSING (mandatory)
 - ffprobe: OK / MISSING (mandatory)
+- arnndn filter: OK / MISSING (mandatory)
+- RNNoise model: OK / MISSING (mandatory)
 - Python: OK (<version>) / MISSING (optional)
 - faster-whisper: OK / NOT INSTALLED (optional)
 - CUDA/GPU: OK (<GPU name>) / CPU-only / N/A

@@ -31,14 +31,15 @@ You receive:
 
 2. Check available disk space. Warn if less than 2GB free.
 
-3. Determine noise floor:
-   - **Preferred:** Use the `noise_floor_db` value provided by the audio-analyzer.
-   - **Fallback:** Sample from the source video:
+3. Locate the RNNoise model for noise reduction:
+   - Check `$HOME/.cache/gameplay-editor/sh.rnnn`
+   - If not found, download it:
      ```bash
-     ffmpeg -i "<source_video_path>" -ss 0 -t 30 -af "astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level:file=$TMP/noise_global.txt" -f null - 2>&1
+     mkdir -p "$HOME/.cache/gameplay-editor"
+     curl -sL "https://github.com/richardpl/arnndn-models/raw/master/sh.rnnn" -o "$HOME/.cache/gameplay-editor/sh.rnnn"
      ```
-     Parse the lowest RMS level from the first 30 seconds.
-   - **Never** use the first 5 seconds of a segment for noise floor detection — segments start at exciting moments, not silence.
+   - Store the resolved absolute path as `<rnnoise_model>`.
+   - **Windows path escaping:** ffmpeg filter strings use `:` as a parameter separator. On Windows, drive letters contain `:` (e.g., `C:/Users/...`). Escape the colon in the model path: `C\:/Users/...`. Apply this escaping when substituting `<rnnoise_model>` into `-af` or `-filter_complex` strings.
 
 4. Determine platform LUFS target:
    - YouTube: `-16`
@@ -54,7 +55,7 @@ For each moment, build a **single ffmpeg command** that extracts, processes audi
 
 Always applied to every segment:
 ```
-afade=t=in:d=0.05,afftdn=nr=20:nf=<noise_floor_db>,loudnorm=I=<platform_lufs>:LRA=11:TP=-1.5,acompressor=threshold=0.1:ratio=4:attack=5:release=50,afade=t=out:st=<segment_duration-0.05>:d=0.05
+afade=t=in:d=0.05,arnndn=m=<rnnoise_model>,loudnorm=I=<platform_lufs>:LRA=11:TP=-1.5,acompressor=threshold=0.1:ratio=4:attack=5:release=50,afade=t=out:st=<segment_duration-0.05>:d=0.05
 ```
 
 The 50ms fade-in and fade-out eliminates click/pop artifacts at segment boundaries.
@@ -100,7 +101,7 @@ Use `-filter_complex` to process and mix both tracks in one pass:
 ffmpeg -ss <start> -to <end> -i "<source_video_path>" \
   [-vf "<video_filters>"] \
   -filter_complex \
-    "[0:a:<voice_index>]afade=t=in:d=0.05,afftdn=nr=20:nf=<noise_floor_db>,loudnorm=I=<platform_lufs>:LRA=11:TP=-1.5,acompressor=threshold=0.1:ratio=4:attack=5:release=50,afade=t=out:st=<dur-0.05>:d=0.05[voice]; \
+    "[0:a:<voice_index>]afade=t=in:d=0.05,arnndn=m=<rnnoise_model>,loudnorm=I=<platform_lufs>:LRA=11:TP=-1.5,acompressor=threshold=0.1:ratio=4:attack=5:release=50,afade=t=out:st=<dur-0.05>:d=0.05[voice]; \
      [0:a:<game_index>]loudnorm=I=<game_lufs>:LRA=11:TP=-1.5[game]; \
      [voice][game]amix=inputs=2:duration=first[outa]" \
   -map 0:v -map "[outa]" \
