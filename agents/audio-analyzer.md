@@ -8,7 +8,7 @@ model: sonnet
 
 # Audio Analyzer Agent
 
-You analyze gameplay video audio to find the most exciting moments — laughter, screaming, crosstalk, exclamations, and tension-release patterns.
+You analyze gameplay video audio to find the most exciting moments — laughter, screaming, dramatic tension, and multi-speaker energy.
 
 ## Input
 
@@ -43,125 +43,78 @@ If classification is ambiguous, ask the user to label tracks.
 Report: `"Found N audio tracks: [track labels]"`
 Report timing: `"audio_probe_ms": <PROBE_MS>`
 
-## Stage 2: Sound Quality Preprocessing
+## Stage 2: Transcription (faster-whisper)
 
-After track detection, preprocess all voice tracks to improve Whisper accuracy and scoring quality.
-
-### Extract Voice Tracks
-
-For each voice track:
+Check if faster-whisper is available:
 ```bash
-START_PREPROC=$(date +%s%N)
-ffmpeg -i "<video_path>" -map 0:a:<voice_index> -ac 1 -ar 16000 -y "<tmp_dir>/voice.wav"
-```
-If multiple voice tracks: `voice.wav`, `voice_2.wav`, etc.
-
-### Measure Noise Floor
-
-Detect all silent sections:
-```bash
-ffmpeg -i "<tmp_dir>/voice.wav" -af "silencedetect=noise=-35dB:d=1" -f null - 2>&1
-```
-
-Parse all `silence_start` / `silence_end` pairs. Find the **longest** quiet section. Measure its RMS level:
-```bash
-ffmpeg -i "<tmp_dir>/voice.wav" -ss <longest_silence_start> -t <longest_silence_duration> \
-  -af "astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level:file=<tmp_dir>/noise_floor.txt" -f null - 2>&1
-```
-
-Parse the average RMS level — this is the session-wide `noise_floor_db`.
-
-### Apply Noise Suppression and Voice Enhancement
-
-For each voice track:
-```bash
-ffmpeg -i "<tmp_dir>/voice.wav" \
-  -af "afftdn=nf=<noise_floor_db>,highpass=f=80,lowpass=f=12000,acompressor=threshold=0.05:ratio=3:attack=5:release=50" \
-  -y "<tmp_dir>/voice_clean.wav"
-```
-
-- `afftdn=nf=<noise_floor_db>` — FFT-based noise reduction tuned to measured floor
-- `highpass=f=80` — removes rumble/hum below 80Hz
-- `lowpass=f=12000` — removes hiss above speech range
-- `acompressor` — evens out quiet/loud speech
-
-Output: `voice_clean.wav` (and `voice_2_clean.wav` etc.). Raw `voice.wav` is kept but not used further. Whisper SRT output filename stays `voice.srt`.
-
-```bash
-END_PREPROC=$(date +%s%N)
-PREPROC_MS=$(( (END_PREPROC - START_PREPROC) / 1000000 ))
-```
-
-Report: `"Noise floor: <noise_floor_db> dB, preprocessing complete"`
-Report timing: `"preprocessing_ms": <PREPROC_MS>`
-
-## Stage 3: Whisper Transcription (uses cleaned audio)
-
-Check if `faster-whisper` is available:
-```bash
-python3 -c "from faster_whisper import WhisperModel; print('ok')" 2>&1
+python3 -c "from faster_whisper import WhisperModel; print('ok')"
 ```
 
 If available:
 
-1. Run faster-whisper via a Python script. faster-whisper uses CTranslate2 for ~4x speedup over the original whisper CLI with identical accuracy and lower VRAM usage (INT8 quantization):
+1. Extract the voice track to WAV:
+   ```bash
+   ffmpeg -i "<video_path>" -map 0:a:<voice_index> -ac 1 -ar 16000 -y "<tmp_dir>/voice.wav"
+   ```
+
+2. Run faster-whisper with the `small` model. Use a Python script to transcribe and produce SRT output:
    ```bash
    START_WHISPER=$(date +%s%N)
-   python3 -c "
-   import sys, os
-   sys.stdout.reconfigure(encoding='utf-8')
-   from faster_whisper import WhisperModel
+   python3 << 'PYEOF'
+import sys
+from faster_whisper import WhisperModel
 
-   model = WhisperModel('small', device='auto', compute_type='int8')
-   segments, info = model.transcribe('<tmp_dir>/voice_clean.wav', language='<language>', beam_size=5)
+model = WhisperModel("small", device="auto", compute_type="auto")
+segments, info = model.transcribe("<tmp_dir>/voice.wav", language="<language>", vad_filter=True)
 
-   srt_path = os.path.join('<tmp_dir>', 'voice.srt')
-   with open(srt_path, 'w', encoding='utf-8') as f:
-       for i, seg in enumerate(segments, 1):
-           start_h, start_r = divmod(seg.start, 3600)
-           start_m, start_s = divmod(start_r, 60)
-           end_h, end_r = divmod(seg.end, 3600)
-           end_m, end_s = divmod(end_r, 60)
-           f.write(f'{i}\n')
-           f.write(f'{int(start_h):02d}:{int(start_m):02d}:{start_s:06.3f} --> {int(end_h):02d}:{int(end_m):02d}:{end_s:06.3f}\n'.replace('.', ','))
-           f.write(f'{seg.text.strip()}\n\n')
+count = 0
+with open("<tmp_dir>/voice.srt", "w", encoding="utf-8") as f:
+    for i, seg in enumerate(segments, 1):
+        count = i
+        def fmt(t):
+            h = int(t // 3600)
+            m = int((t % 3600) // 60)
+            s = int(t % 60)
+            ms = int((t % 1) * 1000)
+            return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+        f.write(f"{i}\n{fmt(seg.start)} --> {fmt(seg.end)}\n{seg.text.strip()}\n\n")
 
-   print(f'Transcribed {i} segments, language={info.language}, prob={info.language_probability:.2f}')
-   "
+print(f"Transcribed {count} segments, language: {info.language} (prob={info.language_probability:.2f})")
+PYEOF
    END_WHISPER=$(date +%s%N)
    WHISPER_MS=$(( (END_WHISPER - START_WHISPER) / 1000000 ))
    ```
-   This produces `voice.srt` directly (no rename needed). The output is always UTF-8.
 
-   **Key faster-whisper options used:**
-   - `device='auto'` — uses GPU (CUDA) if available, falls back to CPU
-   - `compute_type='int8'` — INT8 quantization for ~50% less VRAM and faster inference
-   - `beam_size=5` — same as default openai-whisper for equivalent accuracy
+3. Verify the SRT was produced and has content:
+   ```bash
+   python3 -c "
+   with open('<tmp_dir>/voice.srt', encoding='utf-8') as f:
+       content = f.read()
+   lines = [l for l in content.strip().split('\n') if l.strip()]
+   print(f'SRT: {len(lines)} lines')
+   "
+   ```
 
-2. Parse `voice.srt` for segment-level timestamps and text.
+If faster-whisper is not available, skip this stage and note: `"faster-whisper unavailable, using Minimal tier."`
 
-**When reading Whisper output files**, always open them with explicit `encoding='utf-8'`. On Windows, the default encoding may not be UTF-8.
-
-**Fallback:** If faster-whisper is not available, check for the legacy `whisper` CLI (`whisper --help`). If available, use it as fallback:
-```bash
-PYTHONIOENCODING=utf-8 whisper "<tmp_dir>/voice_clean.wav" --model small --language <language> --output_format srt --output_dir "<tmp_dir>/"
-mv "<tmp_dir>/voice_clean.srt" "<tmp_dir>/voice.srt"
-```
-
-If neither faster-whisper nor the whisper CLI is available, skip this stage and note: `"Whisper unavailable, using Minimal tier."`
-
-If transcription starts but fails mid-run (non-zero exit code), check how much of the `.srt` was produced. Report: `"Whisper failed at approximately <last_timestamp>. Using partial transcript + Minimal tier for remaining duration."` Use whatever transcript was generated for the covered portion, and fall back to Minimal tier scoring for the rest.
+If transcription fails mid-run, check how much of the `.srt` was produced. Report: `"Transcription failed at approximately <last_timestamp>. Using partial transcript."` Use whatever transcript was generated.
 
 Report timing: `"whisper_ms": <WHISPER_MS>`
 
-## Stage 4: Energy Scoring (uses cleaned audio)
+**Important notes:**
+- Always use the `small` model. Do not use base, tiny, medium, or large.
+- Enable `vad_filter=True` for faster processing — skips non-speech sections automatically.
+- `device="auto"` uses CUDA if available, CPU otherwise.
+- `compute_type="auto"` selects the best precision for the device.
+
+## Stage 3: Energy Scoring
 
 ### Loudness Analysis
 
 Extract per-second loudness data for the voice track(s):
 ```bash
 START_SCORING=$(date +%s%N)
-ffmpeg -i "<tmp_dir>/voice_clean.wav" -af "ebur128=metadata=1,ametadata=print:key=lavfi.r128.M:file=<tmp_dir>/loudness.txt" -f null - 2>&1
+ffmpeg -i "<video_path>" -map 0:a:<voice_index> -af "ebur128=metadata=1,ametadata=print:key=lavfi.r128.M:file=<tmp_dir>/loudness.txt" -f null - 2>&1
 ```
 Parse the output to get momentary loudness (M) values per measurement interval. Group into 5-second windows.
 
@@ -171,57 +124,57 @@ Compute the session mean and standard deviation of loudness across all windows.
 
 Extract high-frequency energy (2-4kHz band) per 5-second window:
 ```bash
-ffmpeg -i "<tmp_dir>/voice_clean.wav" -af "highpass=f=2000,lowpass=f=4000,ebur128=metadata=1" -f null - 2>&1
+ffmpeg -i "<video_path>" -map 0:a:<voice_index> -af "highpass=f=2000,lowpass=f=4000,ebur128=metadata=1" -f null - 2>&1
 ```
 High values in this band correlate with laughter and screaming (sharp, bright sounds vs. normal speech).
 
 ### Silence Detection
 
 ```bash
-ffmpeg -i "<tmp_dir>/voice_clean.wav" -af "silencedetect=noise=-35dB:d=3" -f null - 2>&1
+ffmpeg -i "<video_path>" -map 0:a:<voice_index> -af "silencedetect=noise=-35dB:d=3" -f null - 2>&1
 ```
 Parse `silence_start` and `silence_end` timestamps.
 
-### Tension-Release Detection
+### Session Noise Floor Measurement
 
-For each silence period ≥3s (from Silence Detection), analyze the 5-second window immediately after silence ends:
-- Measure loudness delta vs session mean
-- Score = min(silence_duration / 3.0, 1.5) × loudness_delta
-- Normalize to 0-1 range across all windows (min-max)
+Use the longest detected silence period (>=3s) to measure the true noise floor for the edit-assembler's noise reduction:
+```bash
+ffmpeg -i "<video_path>" -ss <longest_silence_start> -t <longest_silence_duration> \
+  -map 0:a:<voice_index> -af "astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level:file=<tmp_dir>/noise_floor.txt" -f null - 2>&1
+```
+Parse the average RMS level — this is the session-wide `noise_floor_db`. Include it in the output JSON so the edit-assembler can use it instead of guessing from segment starts.
 
-### Crosstalk Detection
+If no silence >=3s is found, fall back to the first 30 seconds of the video and take the minimum RMS value.
+
+### Drama Detection
+
+For each silence period >=3s, analyze the 5-second window immediately after silence ends:
+- Measure loudness delta vs. session mean
+- Score = silence_duration_factor x loudness_delta
+  - silence_duration_factor = min(silence_duration / 3.0, 1.5)
+
+### Crosstalk Detection (Multi-track only)
 
 If 2+ voice tracks exist, for each 5-second window, check if both tracks have loudness above session_mean - 6dB simultaneously. Count these as crosstalk windows.
 
-If single track with Whisper: check for Whisper segments with gaps < 0.3s between them AND elevated volume. Heuristic for overlapping speakers.
-
-### Exclamation Detection (requires Whisper transcript)
-
-If a Whisper transcript (`.srt`) was produced (full or partial), scan it for exclamation markers:
-- `!` punctuation
-- ALL CAPS words (3+ characters)
-- Repeated letters ("NOOO", "WHAAAAT", "hahaha")
-
-For each 5-second window, count occurrences that fall within that window's timestamp range. Each occurrence adds +0.1 to the window's final score, capped at +0.3 per window. Applied after the weighted sum.
+If single track with transcript: check for transcript segments with gaps < 0.3s between them AND elevated volume. Heuristic for overlapping speakers.
 
 ### Composite Scoring
 
-Score each 5-second window using the **Minimal Tier** formula:
+Score each 5-second window using the **Minimal Tier** formula from `docs/scoring-weights.md`:
 
-    score = 0.30 × Volume + 0.25 × HighFreq + 0.20 × Crosstalk + 0.15 × TensionRelease + 0.10 × Breadth
-    + exclamation bonus
+    score = 0.25 x Volume + 0.35 x HighFreq + 0.20 x DynRange + 0.20 x Breadth
 
 | Dimension | Weight | Source |
 |-----------|--------|--------|
-| Volume | 0.30 | Per-window RMS loudness relative to session mean (from Loudness Analysis) |
-| High Freq | 0.25 | Ratio of high-frequency energy >2kHz (from High-Frequency Energy) |
-| Crosstalk | 0.20 | Simultaneous speakers per window (from Crosstalk Detection) |
-| Tension-Release | 0.15 | Silence→loudness spike score (from Tension-Release Detection) |
-| Breadth | 0.10 | Signal diversity bonus: `active_dimensions / 4`. A dimension is "active" if its normalized value > 0.08. Counts: Volume, High Freq, Crosstalk, Tension-Release. |
+| Volume | 0.25 | Per-window RMS loudness relative to session mean (from Loudness Analysis) |
+| High Freq | 0.35 | Ratio of high-frequency energy >2kHz (from High-Frequency Energy) |
+| Dynamic Range | 0.20 | Per-second amplitude std within each window (from Loudness Analysis) |
+| Breadth | 0.20 | Signal diversity bonus: `active_dimensions / 3`. A dimension is "active" if its normalized value > 0.08. Counts: Volume, High Freq, Dynamic Range. |
 
-Each dimension is normalized to 0-1 range (min-max across all windows in the session). The weighted sum is the raw score per window. Then add exclamation bonus (+0.1 per occurrence, capped +0.3).
+Each dimension is normalized to 0-1 range (min-max across all windows in the session). The weighted sum is the raw score per window.
 
-**Note:** This is always the Minimal Tier formula. When a valid transcript exists, the calling command (gameplay-edit) recomputes composite scores using the Full Tier 6-dimension formula with the transcript-analyzer's Transcript scores.
+**Note:** This is always the Minimal Tier formula. When a valid transcript exists, the calling command (gameplay-edit) recomputes composite scores using the Full Tier 5-dimension formula with the transcript-analyzer's Transcript scores. The audio-analyzer's scores serve as preliminary rankings.
 
 ```bash
 END_SCORING=$(date +%s%N)
@@ -260,13 +213,12 @@ Return a structured list. Print it as a fenced JSON code block so the calling co
   "transcript_srt": "<tmp_dir>/voice.srt",
   "timing": {
     "audio_probe_ms": 4200,
-    "preprocessing_ms": 12300,
     "whisper_ms": 758000,
     "scoring_ms": 800
   },
   "window_dimensions": [
-    { "window_start": 0.0, "window_end": 5.0, "volume": 0.32, "high_freq": 0.15, "crosstalk": 0.00, "tension_release": 0.22 },
-    { "window_start": 5.0, "window_end": 10.0, "volume": 0.41, "high_freq": 0.67, "crosstalk": 0.55, "tension_release": 0.38 }
+    { "window_start": 0.0, "window_end": 5.0, "volume": 0.32, "high_freq": 0.15, "dyn_range": 0.22 },
+    { "window_start": 5.0, "window_end": 10.0, "volume": 0.41, "high_freq": 0.67, "dyn_range": 0.38 }
   ],
   "moments": [
     {
@@ -277,7 +229,7 @@ Return a structured list. Print it as a fenced JSON code block so the calling co
       "score": 95,
       "signals": ["volume_spike", "high_freq", "crosstalk"],
       "audio_description": "Mass laughter, 3 voices overlapping, volume spike +12dB above mean",
-      "transcript_excerpt": "DID HE JUST— NO WAY! [laughing]"
+      "transcript_excerpt": "DID HE JUST-- NO WAY! [laughing]"
     },
     {
       "index": 2,
@@ -285,18 +237,18 @@ Return a structured list. Print it as a fenced JSON code block so the calling co
       "end": "00:34:55",
       "duration": 43.0,
       "score": 88,
-      "signals": ["tension_release", "volume_spike"],
+      "signals": ["drama", "volume_spike"],
       "audio_description": "4s silence followed by sudden shouting, dramatic tension-release pattern",
-      "transcript_excerpt": "NEEEEM! Várj... WHAT?!"
+      "transcript_excerpt": "NEEEEM! Varj... WHAT?!"
     }
   ]
 }
 ```
 
-**New fields:**
-- `has_transcript`: `true` if Whisper produced a `.srt` with at least one speech segment. `false` if Whisper failed, was unavailable, or the `.srt` contains zero segments.
-- `window_dimensions`: Per-window normalized (0-1) values for each of the 4 audio dimensions (volume, high_freq, crosstalk, tension_release). These are the raw dimension values computed during Stage 4 scoring, before moment merging. Always included regardless of tier. The calling command uses these to compute 6-dimension composite scores when a transcript-analyzer provides the Transcript dimension.
+**Fields:**
+- `has_transcript`: `true` if faster-whisper produced a `.srt` with at least one speech segment. `false` if transcription failed, was unavailable, or the `.srt` contains zero segments.
+- `window_dimensions`: Per-window normalized (0-1) values for each dimension (Volume, High Freq, Dynamic Range). These are the raw dimension values computed during Stage 3 scoring, before moment merging. Always included regardless of tier. The calling command uses these to compute 5-dimension composite scores when a transcript-analyzer provides the Transcript dimension.
 
 **Important:** Return ALL detected moments sorted by score descending, not just high-scoring ones. The calling command handles threshold filtering. Each moment MUST include:
 - `audio_description`: What's happening in the audio (volume spikes, laughter, silence, crosstalk, tension patterns, etc.)
-- `transcript_excerpt`: Relevant Whisper transcript text (if available)
+- `transcript_excerpt`: Relevant transcript text (if available)

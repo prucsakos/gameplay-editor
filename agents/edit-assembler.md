@@ -14,11 +14,11 @@ You assemble a gameplay highlight reel or short-form clips from a list of select
 
 You receive:
 - **source_video_path**: path to the original recording
-- **moments**: list of objects with `start`, `end`, `duration`, `score`, `audio_description`, `screen_description`, `transcript_excerpt` fields
+- **moments**: list of objects with `start`, `end`, `duration`, `score`, `audio_description`, `transcript_excerpt` fields
 - **style**: parsed YAML object from a style preset (transitions, etc.)
 - **platform**: `youtube` or `tiktok` — determines aspect ratio, LUFS, output format
 - **output_path**: where to save the final video(s)
-- **noise_floor_db** (optional): session-wide noise floor in dB, measured from a silent section of the source video by the audio-analyzer. If not provided, fall back to per-segment detection.
+- **noise_floor_db** (optional): session-wide noise floor in dB, measured from a silent section of the source video by the audio-analyzer. If not provided, fall back to source-level detection.
 - **source_width**, **source_height**, **source_fps**: from ffprobe (provided by calling command)
 
 ## Setup
@@ -31,173 +31,115 @@ You receive:
 
 2. Check available disk space. Warn if less than 2GB free.
 
-3. Detect NVENC (hardware encoder):
-   ```bash
-   ffmpeg -hide_banner -encoders 2>&1 | grep h264_nvenc
-   ```
-   If `h264_nvenc` is found, set `HW_ENC=1`. All encoding steps below use NVENC when available, falling back to `libx264` otherwise.
+3. Determine noise floor:
+   - **Preferred:** Use the `noise_floor_db` value provided by the audio-analyzer.
+   - **Fallback:** Sample from the source video:
+     ```bash
+     ffmpeg -i "<source_video_path>" -ss 0 -t 30 -af "astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level:file=$TMP/noise_global.txt" -f null - 2>&1
+     ```
+     Parse the lowest RMS level from the first 30 seconds.
+   - **Never** use the first 5 seconds of a segment for noise floor detection — segments start at exciting moments, not silence.
 
-   **NVENC vs libx264:**
-   - NVENC: ~3-5x faster encoding via GPU ASIC, frees CPU for other work. Slightly lower quality-per-bitrate (~5-10%) — invisible after YouTube/TikTok re-encode.
-   - libx264: Better quality-per-bitrate, but CPU-bound and slower.
+4. Determine platform LUFS target:
+   - YouTube: `-16`
+   - TikTok: `-12`
 
-## Step 1: Extract Segments
+5. If multi-track source (separate voice and game audio), note track indices. Game audio LUFS target = platform LUFS - 6 (i.e., `-22` for YouTube, `-18` for TikTok).
 
-For each moment in the list:
+## Step 1: Process Segments (Single Pass)
 
-**If style.transitions is `cut` AND platform is `youtube` (no per-segment video filters needed):**
-```bash
-START_EXTRACT=$(date +%s%N)
-ffmpeg -ss <start> -to <end> -i "<source_video_path>" -c copy -y "$TMP/segment_<N>.mkv"
-END_EXTRACT=$(date +%s%N)
+For each moment, build a **single ffmpeg command** that extracts, processes audio, applies transitions, and applies platform-specific cropping — all in one encode pass. This avoids quality loss from multiple re-encodes and is significantly faster.
+
+### Audio filter chain
+
+Always applied to every segment:
+```
+afade=t=in:d=0.05,afftdn=nr=20:nf=<noise_floor_db>,loudnorm=I=<platform_lufs>:LRA=11:TP=-1.5,acompressor=threshold=0.1:ratio=4:attack=5:release=50,afade=t=out:st=<segment_duration-0.05>:d=0.05
 ```
 
-**If style.transitions is `fade` OR platform is `tiktok` (re-encode needed for filters):**
+The 50ms fade-in and fade-out eliminates click/pop artifacts at segment boundaries.
 
-With NVENC (`HW_ENC=1`):
-```bash
-ffmpeg -ss <start> -to <end> -i "<source_video_path>" -c:v h264_nvenc -preset p4 -cq <style.export_quality number> -c:a aac -b:a 192k -y "$TMP/segment_<N>.mp4"
-```
+### Video filter chain
 
-Fallback (no NVENC):
-```bash
-ffmpeg -ss <start> -to <end> -i "<source_video_path>" -c:v libx264 -crf <style.export_quality number> -c:a aac -b:a 192k -y "$TMP/segment_<N>.mp4"
-```
+Depends on platform and style:
 
-Report progress: `"Extracting segment N/M..."`
-Track cumulative extraction time as `segment_extraction_ms`.
+| Platform | Transitions | `-vf` filters | Video codec |
+|----------|------------|---------------|-------------|
+| YouTube | `cut` | _(none)_ | `-c:v copy` |
+| YouTube | `fade` | `fade=t=in:d=<td>,fade=t=out:st=<dur-td>:d=<td>` | `-c:v libx264 -crf <quality>` |
+| TikTok | `cut` | `crop=<cw>:<ch>:<cx>:0,scale=1080:1920` | `-c:v libx264 -crf <quality>` |
+| TikTok | `fade` | `crop=<cw>:<ch>:<cx>:0,scale=1080:1920,fade=t=in:d=<td>,fade=t=out:st=<dur-td>:d=<td>` | `-c:v libx264 -crf <quality>` |
 
-If a segment extraction fails, report which segment and the ffmpeg stderr. Skip that segment and continue. Track skipped segments.
+Where `<td>` = `style.transition_duration` (e.g., 0.3s) and `<quality>` = `style.export_quality`.
 
-## Step 2: Audio Processing Pipeline (Always-On)
-
-Applied to every segment. All four stages in a single ffmpeg filter chain to avoid multiple re-encodes.
-
-### 2a: Determine Noise Floor
-
-**Preferred:** Use the `noise_floor_db` value provided by the audio-analyzer (measured from a confirmed silent section of the source video). This is more reliable than per-segment detection because segments often start mid-action.
-
-**Fallback (if `noise_floor_db` not provided):** Sample a quiet section from the source video (not the segment):
-```bash
-ffmpeg -i "<source_video_path>" -ss 0 -t 30 -af "astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level:file=$TMP/noise_global.txt" -f null - 2>&1
-```
-Parse the lowest RMS level from the first 30 seconds as the noise floor.
-
-**Never** use the first 5 seconds of a segment for noise floor detection — segments start at exciting moments, not silence.
-
-### 2b: Measure Voice Loudness
-
-```bash
-ffmpeg -i "$TMP/segment_<N>.mp4" -map 0:a -af "ebur128=peak=true" -f null - 2>&1 | grep "I:"
-```
-Extract integrated loudness for each voice track.
-
-### 2c: Apply Audio Filter Chain
-
-Combine noise reduction, normalization, compression, and anti-click fade in one pass:
-```bash
-START_AUDIO=$(date +%s%N)
-ffmpeg -i "$TMP/segment_<N>.mp4" \
-  -af "afade=t=in:d=0.05,afftdn=nr=20:nf=<noise_floor_db>,loudnorm=I=<platform_lufs>:LRA=11:TP=-1.5,acompressor=threshold=0.1:ratio=4:attack=5:release=50,afade=t=out:st=<segment_duration-0.05>:d=0.05" \
-  -c:v copy -y "$TMP/audio_<N>.mp4"
-END_AUDIO=$(date +%s%N)
-```
-
-The 50ms fade-in and fade-out (`afade`) eliminates click/pop artifacts at segment boundaries. This is applied before noise reduction so the filter doesn't amplify boundary artifacts.
-
-Where `<platform_lufs>` is:
-- `-16` for youtube
-- `-12` for tiktok
-
-### 2d: Mix Game Audio (Multi-Track Only)
-
-If the source has separate voice and game tracks:
-
-1. Measure the average loudness of processed voice tracks
-2. Set game audio to `voice_average - 6dB` (constant). If game is already quieter, leave as-is
-3. Mix:
-
-```bash
-ffmpeg -i "$TMP/audio_<N>.mp4" -ss <start> -to <end> -i "<source_video_path>" \
-  -filter_complex "[1:a:<game_index>]volume=<game_level_linear>[game];[0:a][game]amix=inputs=2:duration=first[outa]" \
-  -map 0:v -map "[outa]" -c:v copy -c:a aac -y "$TMP/mixed_<N>.mp4"
-```
-
-Convert dB to linear: `game_level_linear = 10^(game_level_dB/20)`.
-
-If only 1 audio track, skip this sub-step.
-
-Track cumulative audio processing time as `audio_processing_ms`.
-
-## Step 3: Apply Transitions
-
-**If `fade`:**
-For each segment, apply fade-in at start and fade-out at end:
-
-With NVENC (`HW_ENC=1`):
-```bash
-START_FX=$(date +%s%N)
-ffmpeg -i "$TMP/mixed_<N>.mp4" -vf "fade=t=in:d=<style.transition_duration>,fade=t=out:st=<duration - transition_duration>:d=<style.transition_duration>" -c:v h264_nvenc -preset p4 -cq <style.export_quality number> -c:a copy -y "$TMP/faded_<N>.mp4"
-```
-
-Fallback (no NVENC):
-```bash
-START_FX=$(date +%s%N)
-ffmpeg -i "$TMP/mixed_<N>.mp4" -vf "fade=t=in:d=<style.transition_duration>,fade=t=out:st=<duration - transition_duration>:d=<style.transition_duration>" -c:v libx264 -crf <style.export_quality number> -c:a copy -y "$TMP/faded_<N>.mp4"
-```
-
-**If `cut`:**
-Skip this step entirely.
-
-## Step 4: Platform-Specific Processing
-
-### YouTube Platform
-No additional processing needed. Aspect ratio stays original.
-
-### TikTok Platform
-
-#### 4a: Apply 9:16 Crop
-
-Calculate crop dimensions:
+TikTok crop dimensions:
 ```
 crop_width = source_height * 9 / 16  (rounded to nearest even number)
 crop_height = source_height
 crop_x = (source_width - crop_width) / 2
 ```
 
-For each segment:
+### Single-track audio (1 audio track)
 
-With NVENC (`HW_ENC=1`):
 ```bash
-ffmpeg -i "$TMP/segment_<N>.mp4" \
-  -vf "crop=<crop_width>:<crop_height>:<crop_x>:0,scale=1080:1920" \
-  -c:v h264_nvenc -preset p4 -cq <style.export_quality number> -c:a copy -y "$TMP/cropped_<N>.mp4"
+START_PROCESS=$(date +%s%N)
+ffmpeg -ss <start> -to <end> -i "<source_video_path>" \
+  [-vf "<video_filters>"] \
+  -af "<audio_filters>" \
+  -c:v <codec> [-crf <quality>] -c:a aac -b:a 192k \
+  -y "$TMP/segment_<N>.mp4"
 ```
 
-Fallback (no NVENC):
+When `-c:v copy` (YouTube + cut transitions), omit `-vf` entirely. The audio is still re-encoded through the filter chain while video is stream-copied — fastest possible path.
+
+### Multi-track audio (separate voice + game tracks)
+
+Use `-filter_complex` to process and mix both tracks in one pass:
+
 ```bash
-ffmpeg -i "$TMP/segment_<N>.mp4" \
-  -vf "crop=<crop_width>:<crop_height>:<crop_x>:0,scale=1080:1920" \
-  -c:v libx264 -crf <style.export_quality number> -c:a copy -y "$TMP/cropped_<N>.mp4"
+ffmpeg -ss <start> -to <end> -i "<source_video_path>" \
+  [-vf "<video_filters>"] \
+  -filter_complex \
+    "[0:a:<voice_index>]afade=t=in:d=0.05,afftdn=nr=20:nf=<noise_floor_db>,loudnorm=I=<platform_lufs>:LRA=11:TP=-1.5,acompressor=threshold=0.1:ratio=4:attack=5:release=50,afade=t=out:st=<dur-0.05>:d=0.05[voice]; \
+     [0:a:<game_index>]loudnorm=I=<game_lufs>:LRA=11:TP=-1.5[game]; \
+     [voice][game]amix=inputs=2:duration=first[outa]" \
+  -map 0:v -map "[outa]" \
+  -c:v <codec> [-crf <quality>] -c:a aac -b:a 192k \
+  -y "$TMP/segment_<N>.mp4"
 ```
 
-#### 4b: TikTok High-Stimulus Pacing
+Where `<game_lufs>` = platform LUFS - 6 (e.g., `-22` for YouTube). Since `loudnorm` normalizes the voice track to the target LUFS, the game audio is set 6dB below by normalizing to a lower target — no pre-measurement needed.
 
-For each moment, trim to the peak 5-10 seconds (around the highest-scoring window). If the moment is already ≤10s, keep it as-is. Apply 0.2s hard cuts between sub-segments within each clip.
+If game audio is already quieter than the target, leave it as-is (skip loudnorm on game track, just pass through).
 
-#### 4c: TikTok Clip Duration Rules
+### Progress and error handling
 
+Report progress: `"Processing segment N/M..."`
+Track cumulative processing time as `segment_processing_ms`.
+
+If a segment fails, report which segment and the ffmpeg stderr. Skip that segment and continue. Track skipped segments.
+
+## Step 2: TikTok Post-Processing
+
+**YouTube:** Skip this step entirely.
+
+**TikTok:**
+
+### High-Stimulus Pacing
+For each moment, trim to the peak 5-10 seconds (around the highest-scoring window). If the moment is already <=10s, keep it as-is. Apply 0.2s hard cuts between sub-segments within each clip.
+
+### Clip Duration Rules
 - Clips under 15s: extend lead-in and lead-out by 2s each. If still under 15s, extend further proportionally.
 - Clips over 60s: trim to the peak 60 seconds (highest-scoring contiguous portion).
 
-## Step 5: Concatenate / Export
+## Step 3: Concatenate / Export
 
 ### YouTube Platform (single file)
 
 Create a concat file listing all final segments:
 ```bash
 for each segment file:
-    echo "file '$TMP/<final_segment_N>.mp4'" >> "$TMP/concat.txt"
+    echo "file '$TMP/segment_<N>.mp4'" >> "$TMP/concat.txt"
 
 START_EXPORT=$(date +%s%N)
 ffmpeg -f concat -safe 0 -i "$TMP/concat.txt" -c copy -y "<output_path>"
@@ -210,15 +152,15 @@ EXPORT_MS=$(( (END_EXPORT - START_EXPORT) / 1000000 ))
 Each moment becomes its own standalone file. Include the moment's score in the filename:
 ```bash
 # For each segment N with score S:
-cp "$TMP/<final_segment_N>.mp4" "<output_dir>/<basename>_s<SCORE>_tk_<NN>.mp4"
+cp "$TMP/segment_<N>.mp4" "<output_dir>/<basename>_s<SCORE>_tk_<NN>.mp4"
 ```
 Example: `recording_s95_tk_01.mp4`, `recording_s88_tk_02.mp4`
 
-### Both Platform
+### Both Platforms
 
-Run Steps 4-5 twice — once for youtube config, once for tiktok config.
+Run Steps 1-3 twice — once for youtube config, once for tiktok config.
 
-## Step 6: Cleanup
+## Step 4: Cleanup
 
 If the export succeeded (output file(s) exist and size > 0):
 ```bash
@@ -239,10 +181,8 @@ Return a structured report as a fenced JSON code block:
   "segments_included": 14,
   "segments_skipped": 0,
   "timing": {
-    "segment_extraction_ms": 82000,
-    "audio_processing_ms": 65000,
-    "transitions_ms": 12000,
-    "crop_export_ms": 34000
+    "segment_processing_ms": 82000,
+    "concat_export_ms": 34000
   }
 }
 ```

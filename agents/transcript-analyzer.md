@@ -84,7 +84,7 @@ For **every** moment — both audio-analyzer's existing moments (identified by `
 
 - Describe what's happening in the conversation
 - Reference which `transcript_signals` are present
-- For existing audio-analyzer moments, use their `audio_description` and `screen_description` fields as additional context
+- For existing audio-analyzer moments, use their `audio_description` field as additional context
 - Written in the **language of the transcript** (e.g., if the gameplay is in Hungarian, summaries are in Hungarian)
 - Be concise and descriptive, not generic. Avoid filler phrases like "an exciting moment occurs" — say what actually happens.
 
