@@ -78,68 +78,12 @@ TMP=$(PYTHONUTF8=1 python3 -c "import tempfile; print(tempfile.mkdtemp(prefix='g
 
 Verify the directory exists before proceeding: `ls -d "$TMP"`
 
-### Step 0: Full-Track Noise Reduction
-
-Before any analysis, denoise the entire voice track once. This eliminates RNNoise cold-start artifacts that occur when denoising short segments individually.
-
-1. Locate the RNNoise model:
-   - Check `$HOME/.cache/gameplay-editor/sh.rnnn`
-   - If not found, download it:
-     ```bash
-     mkdir -p "$HOME/.cache/gameplay-editor"
-     curl -sL "https://github.com/richardpl/arnndn-models/raw/master/sh.rnnn" -o "$HOME/.cache/gameplay-editor/sh.rnnn"
-     ```
-   - Store the resolved absolute path as `<rnnoise_model>`.
-   - **Windows path escaping:** ffmpeg's filter parser uses `:` as a parameter separator. On Windows, drive letters contain `:` (e.g., `C:/Users/...`) which breaks filter strings. Neither `\:` escaping on the command line nor `MSYS_NO_PATHCONV=1` reliably solves this due to Git Bash/MSYS2 path mangling interactions.
-   - **Reliable solution — `filter_complex_script`:** Write the filter string to a temp file, then pass it via `-filter_complex_script` (or `-filter_script:a` for simple `-af` chains). Inside the file, use single-quote escaping around the path: `arnndn=m='C\:/Users/...'`. This bypasses both shell mangling and ffmpeg's command-line parser:
-     ```bash
-     FILTER_FILE="$TMP/denoise_filter.txt"
-     # Get Windows-native path and escape the drive colon
-     RNNOISE_WIN=$(cygpath -m "$HOME/.cache/gameplay-editor/sh.rnnn")
-     RNNOISE_ESC=$(echo "$RNNOISE_WIN" | sed "s|:|\\\\:|")
-     # Write filter with single-quote wrapping
-     printf "arnndn=m='%s'" "$RNNOISE_ESC" > "$FILTER_FILE"
-     ```
-   - This pattern applies everywhere `arnndn` appears in a filter string (Step 0, edit-assembler fallback, multi-track voice processing).
-
-2. Probe audio tracks to identify the voice track index (same logic as audio-analyzer Stage 1 — use channel count and loudness heuristics). If only one audio track exists, use it.
-
-3. **Single-track audio:** Extract and denoise in a single ffmpeg pass that produces both outputs (16kHz mono for Whisper + full-quality for assembly) from one RNNoise invocation. Write the filter graph to a script file, then reference it:
-   ```bash
-   # Write filter_complex to file (avoids Windows colon escaping issues)
-   RNNOISE_WIN=$(cygpath -m "$HOME/.cache/gameplay-editor/sh.rnnn")
-   RNNOISE_ESC=$(echo "$RNNOISE_WIN" | sed "s|:|\\\\:|")
-   printf "[0:a:<voice_index>]arnndn=m='%s',asplit=2[a1][a2];[a1]aresample=16000,aformat=channel_layouts=mono[voice]" "$RNNOISE_ESC" > "$TMP/denoise_fc.txt"
-
-   MSYS_NO_PATHCONV=1 ffmpeg -i "<video_path>" \
-     -filter_complex_script "$TMP/denoise_fc.txt" \
-     -map "[voice]" -y "$TMP/voice_clean.wav" \
-     -map "[a2]" -c:a pcm_s16le -y "$TMP/full_audio_clean.wav"
-   ```
-   This runs RNNoise exactly once on the entire recording, then splits the denoised stream: one branch downsampled to 16kHz mono (for Whisper and energy scoring), the other at original quality (for segment assembly). Saves ~50% of Step 0 time compared to running arnndn twice.
-
-4. **Multi-track audio** (separate voice + game tracks): denoise each voice track individually. Each voice track still needs its own RNNoise pass since they're independent streams:
-   ```bash
-   # Write filter to file
-   printf "arnndn=m='%s'" "$RNNOISE_ESC" > "$TMP/denoise_af.txt"
-
-   MSYS_NO_PATHCONV=1 ffmpeg -i "<video_path>" -map 0:a:<voice_index_N> -ac 1 -ar 16000 \
-     -filter_script:a "$TMP/denoise_af.txt" \
-     -y "$TMP/voice_N_clean.wav"
-   ```
-   Game audio tracks do NOT need denoising. The edit-assembler will reference these clean voice tracks directly during segment extraction.
-
-5. Store paths: `voice_clean_path` = `$TMP/voice_clean.wav`, `full_audio_clean_path` = `$TMP/full_audio_clean.wav`
-
-Report: `"Step 0: Full-track noise reduction complete"`
-
 ### Run Audio Analysis
 
 Dispatch the **audio-analyzer** agent with:
 - video_path
 - language
 - tmp_dir: $TMP
-- voice_clean_path: `$TMP/voice_clean.wav` (pre-denoised voice track from Step 0)
 
 The agent returns a JSON result with all detected moments (preliminary 3-dim scores), per-window dimension arrays (`window_dimensions`), timing data, noise floor, and `has_transcript` flag.
 
@@ -262,8 +206,6 @@ Dispatch the **edit-assembler** agent with:
 - output_path
 - noise_floor_db (from analyzer output)
 - source_width, source_height, source_fps
-- full_audio_clean_path: `$TMP/full_audio_clean.wav` (pre-denoised full audio from Step 0)
-- voice_clean_paths: list of per-voice-track clean WAV paths (for multi-track sources)
 
 **If platform is `both`:** dispatch the edit-assembler TWICE:
 1. First with platform=`youtube`, output=`<basename>_edit_yt.mp4`
@@ -290,7 +232,6 @@ Moments: <included> included, <excluded> excluded
 Score threshold: <threshold>
 
 Timing:
-  Noise reduction:     <denoise time>
   Audio analysis:      <audio_analysis time> (probe + transcription + scoring)
   Transcript analysis: <transcript_analysis time>  (only in Full Tier)
   User review:         <user_review time>  (only in analyze mode)
@@ -314,13 +255,13 @@ For `platform=both`, show both summaries.
 
 ## Cleanup
 
-After the pipeline summary is presented, remove the main temp directory (`$TMP`) which contains the intermediate audio files from Step 0:
+After the pipeline summary is presented, remove the main temp directory (`$TMP`) which contains intermediate files:
 
 ```bash
 rm -rf "$TMP"
 ```
 
-This reclaims the disk space used by `voice_clean.wav`, `full_audio_clean.wav`, filter script files, and any other intermediates. For a 3-hour recording this is typically ~2-3 GB.
+This reclaims disk space used by extracted audio, transcripts, and other intermediates.
 
 If the pipeline failed before assembly completed, preserve `$TMP` and report its path for debugging (same policy as the edit-assembler's own temp cleanup).
 
@@ -338,32 +279,28 @@ If the pipeline failed before assembly completed, preserve `$TMP` and report its
 
 Report at each stage. Step counts depend on whether the transcript-analyzer runs.
 
-**When transcript-analyzer runs — analyze mode (6 steps):**
+**When transcript-analyzer runs — analyze mode (5 steps):**
 
-    [1/6] Denoising full audio track (RNNoise)...
-    [2/6] Analyzing audio tracks and transcribing (faster-whisper small)...
-    [3/6] Analyzing transcript for content signals...
-    [4/6] Computing final scores and merging moments...
-    [5/6] Presenting analysis for review... (N moments found, M above threshold)
-    [6/6] Assembling edit... segment N/M complete
-
-**When transcript-analyzer runs — auto mode (5 steps):**
-
-    [1/5] Denoising full audio track (RNNoise)...
-    [2/5] Analyzing audio tracks and transcribing (faster-whisper small)...
-    [3/5] Analyzing transcript for content signals...
-    [4/5] Computing final scores and merging moments...
+    [1/5] Analyzing audio tracks and transcribing (faster-whisper small)...
+    [2/5] Analyzing transcript for content signals...
+    [3/5] Computing final scores and merging moments...
+    [4/5] Presenting analysis for review... (N moments found, M above threshold)
     [5/5] Assembling edit... segment N/M complete
 
-**When transcript-analyzer is skipped — analyze mode (4 steps):**
+**When transcript-analyzer runs — auto mode (4 steps):**
 
-    [1/4] Denoising full audio track (RNNoise)...
-    [2/4] Analyzing audio tracks and scoring moments...
-    [3/4] Presenting analysis for review... (N moments found, M above threshold)
+    [1/4] Analyzing audio tracks and transcribing (faster-whisper small)...
+    [2/4] Analyzing transcript for content signals...
+    [3/4] Computing final scores and merging moments...
     [4/4] Assembling edit... segment N/M complete
 
-**When transcript-analyzer is skipped — auto mode (3 steps):**
+**When transcript-analyzer is skipped — analyze mode (3 steps):**
 
-    [1/3] Denoising full audio track (RNNoise)...
-    [2/3] Analyzing audio tracks and scoring moments...
+    [1/3] Analyzing audio tracks and scoring moments...
+    [2/3] Presenting analysis for review... (N moments found, M above threshold)
     [3/3] Assembling edit... segment N/M complete
+
+**When transcript-analyzer is skipped — auto mode (2 steps):**
+
+    [1/2] Analyzing audio tracks and scoring moments...
+    [2/2] Assembling edit... segment N/M complete

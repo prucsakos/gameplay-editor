@@ -16,7 +16,6 @@ You receive:
 - **video_path**: path to the source video file
 - **language**: Whisper language code (default: `hu`)
 - **tmp_dir**: temp directory for intermediate files
-- **voice_clean_path** (optional): path to a pre-denoised voice WAV (16kHz mono) from the calling command's Step 0. If provided, skip RNNoise denoising in Stage 2 and use this file directly as `voice_clean.wav` for all downstream stages.
 
 Your job is to run the analysis pipeline and return a structured, scored moment list.
 
@@ -65,14 +64,12 @@ PYTHONUTF8=1 python3 -c "from faster_whisper import WhisperModel; print('ok')"
 
 If available:
 
-1. Prepare the voice WAV for transcription:
-   - **If `voice_clean_path` was provided:** Use it directly — copy or symlink to `<tmp_dir>/voice_clean.wav` if not already there. Skip extraction.
-   - **If `voice_clean_path` was NOT provided (fallback):** Extract the voice track to WAV:
-     ```bash
-     ffmpeg -i "<video_path>" -map 0:a:<voice_index> -ac 1 -ar 16000 -y "<tmp_dir>/voice.wav"
-     ```
+1. Extract the voice track to WAV:
+   ```bash
+   ffmpeg -i "<video_path>" -map 0:a:<voice_index> -ac 1 -ar 16000 -y "<tmp_dir>/voice.wav"
+   ```
 
-2. Run faster-whisper with the `small` model on the clean audio (`voice_clean.wav` if available, otherwise `voice.wav`). Use a Python script to transcribe and produce SRT output:
+2. Run faster-whisper with the `small` model on the extracted audio. Use a Python script to transcribe and produce SRT output:
    ```bash
    START_WHISPER=$(date +%s%N)
    PYTHONUTF8=1 python3 << 'PYEOF'
@@ -80,9 +77,7 @@ import sys
 from faster_whisper import WhisperModel
 
 model = WhisperModel("small", device="auto", compute_type="auto")
-# Use pre-denoised audio if available, otherwise raw extraction
-import os
-wav_path = "<tmp_dir>/voice_clean.wav" if os.path.exists("<tmp_dir>/voice_clean.wav") else "<tmp_dir>/voice.wav"
+wav_path = "<tmp_dir>/voice.wav"
 segments, info = model.transcribe(wav_path, language="<language>", vad_filter=True)
 
 count = 0
@@ -129,39 +124,37 @@ Report timing: `"whisper_ms": <WHISPER_MS>`
 
 ### Loudness Analysis
 
-Extract per-second loudness data. Use the pre-denoised voice track if available, otherwise fall back to extracting from the source video:
+Extract per-second loudness data from the source video's voice track:
 
 ```bash
 START_SCORING=$(date +%s%N)
-# If voice_clean_path was provided, use it directly as input:
-ffmpeg -i "<voice_clean_wav_or_video_path>" [-map 0:a:<voice_index>] -af "ebur128=metadata=1,ametadata=print:key=lavfi.r128.M:file=<tmp_dir>/loudness.txt" -f null - 2>&1
+ffmpeg -i "<video_path>" -map 0:a:<voice_index> -af "ebur128=metadata=1,ametadata=print:key=lavfi.r128.M:file=<tmp_dir>/loudness.txt" -f null - 2>&1
 ```
-When using the clean WAV file as input, omit the `-map` flag (it only has one stream). When using the source video, include `-map 0:a:<voice_index>`.
 Parse the output to get momentary loudness (M) values per measurement interval. Group into 5-second windows.
 
 Compute the session mean and standard deviation of loudness across all windows.
 
 ### High-Frequency Energy (Laughter/Screaming)
 
-Extract high-frequency energy (2-4kHz band) per 5-second window. Use the clean WAV if available, otherwise the source video:
+Extract high-frequency energy (2-4kHz band) per 5-second window from the source video's voice track:
 ```bash
-ffmpeg -i "<voice_clean_wav_or_video_path>" [-map 0:a:<voice_index>] -af "highpass=f=2000,lowpass=f=4000,ebur128=metadata=1" -f null - 2>&1
+ffmpeg -i "<video_path>" -map 0:a:<voice_index> -af "highpass=f=2000,lowpass=f=4000,ebur128=metadata=1" -f null - 2>&1
 ```
 High values in this band correlate with laughter and screaming (sharp, bright sounds vs. normal speech).
 
 ### Silence Detection
 
 ```bash
-ffmpeg -i "<voice_clean_wav_or_video_path>" [-map 0:a:<voice_index>] -af "silencedetect=noise=-35dB:d=3" -f null - 2>&1
+ffmpeg -i "<video_path>" -map 0:a:<voice_index> -af "silencedetect=noise=-35dB:d=3" -f null - 2>&1
 ```
 Parse `silence_start` and `silence_end` timestamps.
 
 ### Session Noise Floor Measurement
 
-Use the longest detected silence period (>=3s) to measure the true noise floor for the edit-assembler's noise reduction:
+Use the longest detected silence period (>=3s) to measure the true noise floor for the edit-assembler's noise gate:
 ```bash
-ffmpeg -i "<voice_clean_wav_or_video_path>" -ss <longest_silence_start> -t <longest_silence_duration> \
-  [-map 0:a:<voice_index>] -af "astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level:file=<tmp_dir>/noise_floor.txt" -f null - 2>&1
+ffmpeg -i "<video_path>" -ss <longest_silence_start> -t <longest_silence_duration> \
+  -map 0:a:<voice_index> -af "astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level:file=<tmp_dir>/noise_floor.txt" -f null - 2>&1
 ```
 Parse the average RMS level — this is the session-wide `noise_floor_db`. Include it in the output JSON so the edit-assembler can use it instead of guessing from segment starts.
 

@@ -17,34 +17,21 @@ flowchart TD
 
     TMP[Create temp directory - $TMP<br/>Start PIPELINE timer]
 
-    TMP --> S0
-
-    subgraph S0 [Step 0 — Full-Track Noise Reduction]
-        direction TB
-        S0_MODEL[Locate RNNoise model<br/>$HOME/.cache/gameplay-editor/sh.rnnn]
-        S0_MODEL --> S0_PROBE[Probe audio tracks<br/>Identify voice track index]
-        S0_PROBE --> S0_MULTI{Multi-track?}
-
-        S0_MULTI -->|single track| S0_SINGLE[Single-pass denoise with asplit<br/><code>ffmpeg -i video -filter_complex<br/>arnndn&#x2192;asplit&#x2192;[16kHz mono voice_clean.wav]<br/>&#x2003;&#x2003;&#x2003;&#x2003;&#x2003;&#x2003;&#x2003;&#x2003;&#x2192;[full-quality full_audio_clean.wav]</code><br/>One RNNoise pass produces both outputs]
-
-        S0_MULTI -->|multi-track| S0_MULTI_EXT[Denoise each voice track<br/><code>ffmpeg ... -y $TMP/voice_N_clean.wav</code><br/>Game audio tracks: no denoising]
-    end
-
-    S0 --> AA
+    TMP --> AA
 
     subgraph AA [Audio Analyzer Agent]
         direction TB
-        AA_IN[/Inputs: video_path, language,<br/>tmp_dir, voice_clean_path/]
+        AA_IN[/Inputs: video_path, language,<br/>tmp_dir/]
         AA_IN --> AA_S1[Stage 1 — Track Detection<br/>ffprobe streams, classify voice vs game,<br/>measure avg loudness]
         AA_S1 --> AA_S2_CHECK{faster-whisper<br/>available?}
 
-        AA_S2_CHECK -->|yes| AA_S2[Stage 2 — Transcription<br/>Uses <b>voice_clean.wav</b><br/>WhisperModel small, vad_filter=True<br/>Output: voice.srt]
+        AA_S2_CHECK -->|yes| AA_S2[Stage 2 — Transcription<br/>Extract voice track to WAV<br/>WhisperModel small, vad_filter=True<br/>Output: voice.srt]
         AA_S2_CHECK -->|no| AA_S2_SKIP[Skip transcription<br/>has_transcript = false]
 
         AA_S2 --> AA_S3
         AA_S2_SKIP --> AA_S3
 
-        AA_S3[Stage 3 — Energy Scoring<br/>All on <b>voice_clean.wav</b>]
+        AA_S3[Stage 3 — Energy Scoring<br/>All on source video voice track]
         AA_S3 --> AA_LOUD[Loudness Analysis<br/>ebur128 per 5s window<br/>session mean & stddev]
         AA_S3 --> AA_HF[High-Freq Energy<br/>2-4kHz band per 5s window]
         AA_S3 --> AA_SIL[Silence Detection<br/>silencedetect -35dB d=3]
@@ -99,24 +86,16 @@ flowchart TD
 
     subgraph EA [Edit Assembler Agent]
         direction TB
-        EA_IN[/Inputs: source_video_path, moments,<br/>style, platform, output_path,<br/>noise_floor_db, resolution, fps,<br/>full_audio_clean_path, voice_clean_paths/]
+        EA_IN[/Inputs: source_video_path, moments,<br/>style, platform, output_path,<br/>noise_floor_db, resolution, fps/]
 
-        EA_IN --> EA_SETUP[Setup<br/>Create temp dir, check disk space,<br/>detect clean audio, determine LUFS]
+        EA_IN --> EA_SETUP[Setup<br/>Create temp dir, check disk space,<br/>determine LUFS]
         EA_SETUP --> EA_SEG_LOOP
 
         subgraph EA_SEG_LOOP [Step 1 — Process Each Segment]
             direction TB
-            EA_CLEAN_CHECK{full_audio_clean_path<br/>provided?}
-
-            EA_CLEAN_CHECK -->|yes| EA_DUAL[Dual-input ffmpeg<br/>Video: source file<br/>Audio: clean WAV<br/>-map 0:v -map 1:a]
-            EA_DUAL --> EA_AF_CLEAN[Audio filters — no arnndn<br/>HPF 80Hz → afade in → loudnorm → agate → acompressor → afade out]
-
-            EA_CLEAN_CHECK -->|no — fallback| EA_SINGLE[Single-input ffmpeg<br/>from source video]
-            EA_SINGLE --> EA_AF_ARNNDN[Audio filters — with arnndn<br/>HPF 80Hz → afade in → arnndn → loudnorm → agate → acompressor → afade out]
-
-            EA_AF_CLEAN --> EA_VF[Apply video filters<br/>platform crop, transitions, fade]
-            EA_AF_ARNNDN --> EA_VF
-
+            EA_EXTRACT[Single-input ffmpeg<br/>from source video]
+            EA_EXTRACT --> EA_AF[Audio filters<br/>HPF 80Hz → afade in → loudnorm → agate → acompressor → afade out]
+            EA_AF --> EA_VF[Apply video filters<br/>platform crop, transitions, fade]
             EA_VF --> EA_SEG_OUT[segment_N.mp4]
         end
 
@@ -140,11 +119,10 @@ flowchart TD
 
     EA --> SUMMARY
 
-    SUMMARY[Pipeline Summary<br/>Source & output info<br/>Moments included / excluded<br/><br/>Timing: Noise reduction - Audio analysis<br/>Transcript analysis - User review<br/>Segment processing - Export - Total<br/><br/>Platform - Tier - Language]
+    SUMMARY[Pipeline Summary<br/>Source & output info<br/>Moments included / excluded<br/><br/>Timing: Audio analysis<br/>Transcript analysis - User review<br/>Segment processing - Export - Total<br/><br/>Platform - Tier - Language]
 
     SUMMARY --> DONE([Done])
 
-    style S0 fill:#2d5a3d,stroke:#4a9,color:#fff
     style AA fill:#2d3a5a,stroke:#49a,color:#fff
     style TA fill:#4a2d5a,stroke:#94a,color:#fff
     style EA fill:#5a3a2d,stroke:#a94,color:#fff
@@ -156,11 +134,6 @@ flowchart TD
 
 | Color | Component | File |
 |-------|-----------|------|
-| Green | Step 0 — Full-Track Noise Reduction | `commands/gameplay-edit.md` |
 | Blue | Audio Analyzer Agent | `agents/audio-analyzer.md` |
 | Purple | Transcript Analyzer Agent | `agents/transcript-analyzer.md` |
 | Orange | Edit Assembler Agent | `agents/edit-assembler.md` |
-
-## Key Design Decision
-
-**RNNoise runs once on the full audio track in Step 0** before any agent is dispatched. This gives the neural network the entire recording to maintain continuous state — eliminating cold-start noise bursts that occurred when denoising short segments individually. For single-track sources, a single ffmpeg pass with `asplit` produces both the 16kHz mono voice WAV (for Whisper/scoring) and the full-quality denoised WAV (for assembly) from one RNNoise invocation. All downstream stages use the pre-denoised audio.
