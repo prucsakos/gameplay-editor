@@ -78,12 +78,58 @@ TMP=$(PYTHONUTF8=1 python3 -c "import tempfile; print(tempfile.mkdtemp(prefix='g
 
 Verify the directory exists before proceeding: `ls -d "$TMP"`
 
+### Step 0: Full-Track Noise Reduction
+
+Before any analysis, denoise the entire voice track once. This eliminates RNNoise cold-start artifacts that occur when denoising short segments individually.
+
+1. Locate the RNNoise model:
+   - Check `$HOME/.cache/gameplay-editor/sh.rnnn`
+   - If not found, download it:
+     ```bash
+     mkdir -p "$HOME/.cache/gameplay-editor"
+     curl -sL "https://github.com/richardpl/arnndn-models/raw/master/sh.rnnn" -o "$HOME/.cache/gameplay-editor/sh.rnnn"
+     ```
+   - Store the resolved absolute path as `<rnnoise_model>`.
+   - **Windows path escaping:** ffmpeg filter strings use `:` as a parameter separator. On Windows, drive letters contain `:` (e.g., `C:/Users/...`). Escape the colon in the model path: `C\:/Users/...`. Apply this escaping when substituting `<rnnoise_model>` into `-af` filter strings.
+
+2. Probe audio tracks to identify the voice track index (same logic as audio-analyzer Stage 1 — use channel count and loudness heuristics). If only one audio track exists, use it.
+
+3. Extract and denoise the full voice track in a single ffmpeg pass:
+   ```bash
+   ffmpeg -i "<video_path>" -map 0:a:<voice_index> -ac 1 -ar 16000 \
+     -af "arnndn=m=<rnnoise_model>" \
+     -y "$TMP/voice_clean.wav"
+   ```
+   This gives RNNoise the entire recording to maintain continuous state — no cold starts.
+
+4. If multi-track audio (separate voice + game tracks), denoise each voice track:
+   ```bash
+   ffmpeg -i "<video_path>" -map 0:a:<voice_index_N> -ac 1 -ar 16000 \
+     -af "arnndn=m=<rnnoise_model>" \
+     -y "$TMP/voice_N_clean.wav"
+   ```
+   Game audio tracks do NOT need denoising.
+
+5. Also extract the full audio (all tracks, original format) with RNNoise applied to voice track(s) only, for use by the edit-assembler during segment extraction:
+   - **Single-track:**
+     ```bash
+     ffmpeg -i "<video_path>" -vn \
+       -af "arnndn=m=<rnnoise_model>" \
+       -c:a pcm_s16le -y "$TMP/full_audio_clean.wav"
+     ```
+   - **Multi-track:** Extract and denoise each voice track separately (as above). The edit-assembler will reference these clean tracks directly.
+
+6. Store paths: `voice_clean_path` = `$TMP/voice_clean.wav`, `full_audio_clean_path` = `$TMP/full_audio_clean.wav`
+
+Report: `"Step 0: Full-track noise reduction complete"`
+
 ### Run Audio Analysis
 
 Dispatch the **audio-analyzer** agent with:
 - video_path
 - language
 - tmp_dir: $TMP
+- voice_clean_path: `$TMP/voice_clean.wav` (pre-denoised voice track from Step 0)
 
 The agent returns a JSON result with all detected moments (preliminary 3-dim scores), per-window dimension arrays (`window_dimensions`), timing data, noise floor, and `has_transcript` flag.
 
@@ -206,6 +252,8 @@ Dispatch the **edit-assembler** agent with:
 - output_path
 - noise_floor_db (from analyzer output)
 - source_width, source_height, source_fps
+- full_audio_clean_path: `$TMP/full_audio_clean.wav` (pre-denoised full audio from Step 0)
+- voice_clean_paths: list of per-voice-track clean WAV paths (for multi-track sources)
 
 **If platform is `both`:** dispatch the edit-assembler TWICE:
 1. First with platform=`youtube`, output=`<basename>_edit_yt.mp4`
@@ -232,6 +280,7 @@ Moments: <included> included, <excluded> excluded
 Score threshold: <threshold>
 
 Timing:
+  Noise reduction:     <denoise time>
   Audio analysis:      <audio_analysis time> (probe + transcription + scoring)
   Transcript analysis: <transcript_analysis time>  (only in Full Tier)
   User review:         <user_review time>  (only in analyze mode)
@@ -267,28 +316,32 @@ For `platform=both`, show both summaries.
 
 Report at each stage. Step counts depend on whether the transcript-analyzer runs.
 
-**When transcript-analyzer runs — analyze mode (5 steps):**
+**When transcript-analyzer runs — analyze mode (6 steps):**
 
-    [1/5] Analyzing audio tracks and transcribing (faster-whisper small)...
-    [2/5] Analyzing transcript for content signals...
-    [3/5] Computing final scores and merging moments...
-    [4/5] Presenting analysis for review... (N moments found, M above threshold)
+    [1/6] Denoising full audio track (RNNoise)...
+    [2/6] Analyzing audio tracks and transcribing (faster-whisper small)...
+    [3/6] Analyzing transcript for content signals...
+    [4/6] Computing final scores and merging moments...
+    [5/6] Presenting analysis for review... (N moments found, M above threshold)
+    [6/6] Assembling edit... segment N/M complete
+
+**When transcript-analyzer runs — auto mode (5 steps):**
+
+    [1/5] Denoising full audio track (RNNoise)...
+    [2/5] Analyzing audio tracks and transcribing (faster-whisper small)...
+    [3/5] Analyzing transcript for content signals...
+    [4/5] Computing final scores and merging moments...
     [5/5] Assembling edit... segment N/M complete
 
-**When transcript-analyzer runs — auto mode (4 steps):**
+**When transcript-analyzer is skipped — analyze mode (4 steps):**
 
-    [1/4] Analyzing audio tracks and transcribing (faster-whisper small)...
-    [2/4] Analyzing transcript for content signals...
-    [3/4] Computing final scores and merging moments...
+    [1/4] Denoising full audio track (RNNoise)...
+    [2/4] Analyzing audio tracks and scoring moments...
+    [3/4] Presenting analysis for review... (N moments found, M above threshold)
     [4/4] Assembling edit... segment N/M complete
 
-**When transcript-analyzer is skipped — analyze mode (3 steps):**
+**When transcript-analyzer is skipped — auto mode (3 steps):**
 
-    [1/3] Analyzing audio tracks and scoring moments...
-    [2/3] Presenting analysis for review... (N moments found, M above threshold)
+    [1/3] Denoising full audio track (RNNoise)...
+    [2/3] Analyzing audio tracks and scoring moments...
     [3/3] Assembling edit... segment N/M complete
-
-**When transcript-analyzer is skipped — auto mode (2 steps):**
-
-    [1/2] Analyzing audio tracks and scoring moments...
-    [2/2] Assembling edit... segment N/M complete

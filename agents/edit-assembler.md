@@ -20,6 +20,8 @@ You receive:
 - **output_path**: where to save the final video(s)
 - **noise_floor_db** (optional): session-wide noise floor in dB, measured from a silent section of the source video by the audio-analyzer. If not provided, fall back to source-level detection.
 - **source_width**, **source_height**, **source_fps**: from ffprobe (provided by calling command)
+- **full_audio_clean_path** (optional): path to the pre-denoised full audio WAV from Step 0. If provided, use this as the audio source for segment extraction instead of the source video's audio, and skip per-segment RNNoise (arnndn).
+- **voice_clean_paths** (optional): list of per-voice-track clean WAV paths for multi-track sources.
 
 ## Windows Compatibility
 
@@ -35,15 +37,17 @@ All `python3`/`python` invocations MUST be prefixed with `PYTHONUTF8=1`. Avoid n
 
 2. Check available disk space. Warn if less than 2GB free.
 
-3. Locate the RNNoise model for noise reduction:
-   - Check `$HOME/.cache/gameplay-editor/sh.rnnn`
-   - If not found, download it:
-     ```bash
-     mkdir -p "$HOME/.cache/gameplay-editor"
-     curl -sL "https://github.com/richardpl/arnndn-models/raw/master/sh.rnnn" -o "$HOME/.cache/gameplay-editor/sh.rnnn"
-     ```
-   - Store the resolved absolute path as `<rnnoise_model>`.
-   - **Windows path escaping:** ffmpeg filter strings use `:` as a parameter separator. On Windows, drive letters contain `:` (e.g., `C:/Users/...`). Escape the colon in the model path: `C\:/Users/...`. Apply this escaping when substituting `<rnnoise_model>` into `-af` or `-filter_complex` strings.
+3. Check if `full_audio_clean_path` was provided:
+   - **If provided:** Audio is already denoised by Step 0. No per-segment RNNoise needed. The audio filter chain will omit `arnndn`.
+   - **If NOT provided (fallback):** Locate the RNNoise model for per-segment noise reduction:
+     - Check `$HOME/.cache/gameplay-editor/sh.rnnn`
+     - If not found, download it:
+       ```bash
+       mkdir -p "$HOME/.cache/gameplay-editor"
+       curl -sL "https://github.com/richardpl/arnndn-models/raw/master/sh.rnnn" -o "$HOME/.cache/gameplay-editor/sh.rnnn"
+       ```
+     - Store the resolved absolute path as `<rnnoise_model>`.
+     - **Windows path escaping:** ffmpeg filter strings use `:` as a parameter separator. On Windows, drive letters contain `:` (e.g., `C:/Users/...`). Escape the colon in the model path: `C\:/Users/...`. Apply this escaping when substituting `<rnnoise_model>` into `-af` or `-filter_complex` strings.
 
 4. Determine platform LUFS target:
    - YouTube: `-16`
@@ -57,7 +61,13 @@ For each moment, build a **single ffmpeg command** that extracts, processes audi
 
 ### Audio filter chain
 
-Always applied to every segment:
+**When `full_audio_clean_path` is provided (pre-denoised — default path):**
+```
+afade=t=in:d=0.05,loudnorm=I=<platform_lufs>:LRA=11:TP=-1.5,acompressor=threshold=0.1:ratio=4:attack=5:release=50,afade=t=out:st=<segment_duration-0.05>:d=0.05
+```
+RNNoise is omitted — noise was already removed from the full track in Step 0, eliminating cold-start artifacts.
+
+**When `full_audio_clean_path` is NOT provided (fallback — per-segment denoising):**
 ```
 afade=t=in:d=0.05,arnndn=m=<rnnoise_model>,loudnorm=I=<platform_lufs>:LRA=11:TP=-1.5,acompressor=threshold=0.1:ratio=4:attack=5:release=50,afade=t=out:st=<segment_duration-0.05>:d=0.05
 ```
@@ -86,6 +96,20 @@ crop_x = (source_width - crop_width) / 2
 
 ### Single-track audio (1 audio track)
 
+**When `full_audio_clean_path` is provided (default):**
+Use two inputs — video from source, audio from the pre-denoised WAV:
+```bash
+START_PROCESS=$(date +%s%N)
+ffmpeg -ss <start> -to <end> -i "<source_video_path>" \
+  -ss <start> -to <end> -i "<full_audio_clean_path>" \
+  -map 0:v -map 1:a \
+  [-vf "<video_filters>"] \
+  -af "<audio_filters>" \
+  -c:v <codec> [-crf <quality>] -c:a aac -b:a 192k \
+  -y "$TMP/segment_<N>.mp4"
+```
+
+**When `full_audio_clean_path` is NOT provided (fallback):**
 ```bash
 START_PROCESS=$(date +%s%N)
 ffmpeg -ss <start> -to <end> -i "<source_video_path>" \
@@ -99,8 +123,24 @@ When `-c:v copy` (YouTube + cut transitions), omit `-vf` entirely. The audio is 
 
 ### Multi-track audio (separate voice + game tracks)
 
-Use `-filter_complex` to process and mix both tracks in one pass:
+Use `-filter_complex` to process and mix both tracks in one pass.
 
+**When `voice_clean_paths` are provided (default):**
+Use the pre-denoised voice WAV as a separate input. No `arnndn` in the filter chain:
+```bash
+ffmpeg -ss <start> -to <end> -i "<source_video_path>" \
+  -ss <start> -to <end> -i "<voice_clean_path>" \
+  [-vf "<video_filters>"] \
+  -filter_complex \
+    "[1:a]afade=t=in:d=0.05,loudnorm=I=<platform_lufs>:LRA=11:TP=-1.5,acompressor=threshold=0.1:ratio=4:attack=5:release=50,afade=t=out:st=<dur-0.05>:d=0.05[voice]; \
+     [0:a:<game_index>]loudnorm=I=<game_lufs>:LRA=11:TP=-1.5[game]; \
+     [voice][game]amix=inputs=2:duration=first[outa]" \
+  -map 0:v -map "[outa]" \
+  -c:v <codec> [-crf <quality>] -c:a aac -b:a 192k \
+  -y "$TMP/segment_<N>.mp4"
+```
+
+**When `voice_clean_paths` are NOT provided (fallback):**
 ```bash
 ffmpeg -ss <start> -to <end> -i "<source_video_path>" \
   [-vf "<video_filters>"] \
