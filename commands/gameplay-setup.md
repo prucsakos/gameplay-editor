@@ -58,7 +58,7 @@ Or `pip3 install faster-whisper` if `pip` is not available.
 
 If installation succeeds, verify by running:
 ```bash
-python3 -c "from faster_whisper import WhisperModel; print('faster-whisper OK')"
+PYTHONUTF8=1 python3 -c "from faster_whisper import WhisperModel; print('faster-whisper OK')"
 ```
 Or use `python` if `python3` is not available.
 
@@ -71,7 +71,7 @@ If installation fails, report the error and tell the user: "faster-whisper insta
 faster-whisper uses CTranslate2 as its backend. Check GPU availability:
 
 ```bash
-python3 -c "
+PYTHONUTF8=1 python3 -c "
 try:
     import ctranslate2
     print(f'CTranslate2 {ctranslate2.__version__}')

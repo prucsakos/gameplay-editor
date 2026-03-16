@@ -21,13 +21,17 @@ You receive:
 - **noise_floor_db** (optional): session-wide noise floor in dB, measured from a silent section of the source video by the audio-analyzer. If not provided, fall back to source-level detection.
 - **source_width**, **source_height**, **source_fps**: from ffprobe (provided by calling command)
 
+## Windows Compatibility
+
+All `python3`/`python` invocations MUST be prefixed with `PYTHONUTF8=1`. Avoid non-ASCII characters in any printed output from Python scripts.
+
 ## Setup
 
-1. Create a temp working directory:
+1. Create a temp working directory using Python's `tempfile` for Windows path compatibility (do NOT use `mktemp -d "/tmp/..."` — MSYS2/Git Bash maps `/tmp/` differently than Python):
    ```bash
-   TMP=$(mktemp -d "/tmp/gameplay-editor-XXXXXX")
+   TMP=$(PYTHONUTF8=1 python3 -c "import tempfile; print(tempfile.mkdtemp(prefix='gameplay-editor-'))")
    ```
-   All intermediate files go here.
+   Verify: `ls -d "$TMP"`. All intermediate files go here.
 
 2. Check available disk space. Warn if less than 2GB free.
 

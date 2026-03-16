@@ -19,6 +19,12 @@ From the user's input, extract:
 - **mode** (default: `analyze`): one of `analyze`, `auto`
 - **output** (default: `Outs/<source_basename>_edit.mp4` relative to source video's parent directory). For TikTok clips, each file includes the moment's score: `<basename>_s<SCORE>_tk_<NN>.mp4`
 
+## Windows Compatibility
+
+**PYTHONUTF8=1**: All `python3`/`python` invocations MUST be prefixed with `PYTHONUTF8=1`. Windows defaults to cp1250 encoding which crashes on non-ASCII characters in stdout. This applies to every Python one-liner and heredoc script in the pipeline.
+
+**ASCII-only output**: All printed output from Python scripts must use ASCII characters only. No `★`, `→`, `×`, `─` — use `*`, `->`, `x`, `-` instead.
+
 ## Validate
 
 1. Check the video file exists: `ls -la "<video_path>"`
@@ -39,7 +45,7 @@ From the user's input, extract:
 
 ## Check faster-whisper Availability
 
-Run `python3 -c "from faster_whisper import WhisperModel; print('ok')"` quietly. If it works, report: `"Running with faster-whisper (Full tier) — transcription + content analysis"`
+Run `PYTHONUTF8=1 python3 -c "from faster_whisper import WhisperModel; print('ok')"` quietly. If it works, report: `"Running with faster-whisper (Full tier) — transcription + content analysis"`
 If not: `"faster-whisper not available — using volume-based analysis only (Minimal tier). Run /gameplay-setup for better results."`
 
 ## Single Prompt (analyze mode only)
@@ -64,9 +70,13 @@ If mode is `auto` OR all parameters were provided via CLI flags, skip the prompt
 
 ### Create temp directory
 
+Use Python's `tempfile` to create the temp directory — this ensures the path is a native Windows path that both bash and Python can resolve consistently. Do NOT use `mktemp -d "/tmp/..."` on Windows, as MSYS2/Git Bash maps `/tmp/` differently than Python.
+
 ```bash
-TMP=$(mktemp -d "/tmp/gameplay-editor-XXXXXX")
+TMP=$(PYTHONUTF8=1 python3 -c "import tempfile; print(tempfile.mkdtemp(prefix='gameplay-editor-'))")
 ```
+
+Verify the directory exists before proceeding: `ls -d "$TMP"`
 
 ### Run Audio Analysis
 
@@ -101,7 +111,7 @@ The agent returns per-window Transcript scores, discovered moments, clip summari
 
 After receiving the transcript-analyzer's output, recompute scores using the Full Tier 5-dimension formula from `docs/scoring-weights.md`:
 
-    score = 0.20 × Volume + 0.25 × HighFreq + 0.15 × DynRange + 0.15 × Breadth + 0.25 × Transcript
+    score = 0.20 x Volume + 0.25 x HighFreq + 0.15 x DynRange + 0.15 x Breadth + 0.25 x Transcript
 
 For each 5-second window:
 1. Read the 3 audio dimensions from `window_dimensions` (audio-analyzer output)
@@ -139,15 +149,15 @@ Source: recording.mkv (3h 24m)
 Score threshold: 70 | Platform: youtube
 
 All detected moments (37):
-  ★ #1  [Score: 95] 00:12:28 → 00:13:07 (39s)
+  * #1  [Score: 95] 00:12:28 → 00:13:07 (39s)
         Audio: Mass laughter, 3 voices overlapping, volume spike +12dB
         Summary: "Mindenki egyszerre kiabál amikor a csapattárs véletlenül felrobbantja az egész bázist"
 
-  ★ #2  [Score: 88] 00:34:12 → 00:34:55 (43s)
+  * #2  [Score: 88] 00:34:12 → 00:34:55 (43s)
         Audio: 4s silence → sudden shouting, dramatic tension-release
         Summary: "4 másodperc csend után hirtelen ordítás — NEEEEM! Várj... WHAT?!"
 
-  ★ #3  [Score: 75] 00:48:01 → 00:48:28 (27s)
+  * #3  [Score: 75] 00:48:01 → 00:48:28 (27s)
         Audio: Sustained high-freq energy (laughter), moderate volume
         Summary: "Folyamatos nevetés — ez nem lehet igaz"
 
@@ -160,7 +170,7 @@ All detected moments (37):
         Summary: "figyelj ide..."
 ...
 
-★ = above threshold (70) — will be included
+* = above threshold (70) — will be included
 Total above threshold: 14 moments (6m 12s)
 Total below threshold: 23 moments
 ```

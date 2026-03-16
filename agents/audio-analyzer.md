@@ -19,6 +19,18 @@ You receive:
 
 Your job is to run the analysis pipeline and return a structured, scored moment list.
 
+## Windows Compatibility
+
+All Python invocations (`python3` or `python`) MUST be prefixed with `PYTHONUTF8=1` to force UTF-8 encoding on stdout/stderr. Without this, Windows cp1250 codepage crashes on any non-ASCII character (accented letters in transcripts, special symbols, etc.):
+
+```bash
+PYTHONUTF8=1 python3 << 'PYEOF'
+...
+PYEOF
+```
+
+Additionally, avoid printing non-ASCII decorative characters (e.g., `★`, `→`, `─`) from Python scripts. Use ASCII equivalents (`*`, `->`, `-`).
+
 ## Stage 1: Track Detection
 
 Run:
@@ -47,7 +59,7 @@ Report timing: `"audio_probe_ms": <PROBE_MS>`
 
 Check if faster-whisper is available:
 ```bash
-python3 -c "from faster_whisper import WhisperModel; print('ok')"
+PYTHONUTF8=1 python3 -c "from faster_whisper import WhisperModel; print('ok')"
 ```
 
 If available:
@@ -60,7 +72,7 @@ If available:
 2. Run faster-whisper with the `small` model. Use a Python script to transcribe and produce SRT output:
    ```bash
    START_WHISPER=$(date +%s%N)
-   python3 << 'PYEOF'
+   PYTHONUTF8=1 python3 << 'PYEOF'
 import sys
 from faster_whisper import WhisperModel
 
@@ -87,7 +99,7 @@ PYEOF
 
 3. Verify the SRT was produced and has content:
    ```bash
-   python3 -c "
+   PYTHONUTF8=1 python3 -c "
    with open('<tmp_dir>/voice.srt', encoding='utf-8') as f:
        content = f.read()
    lines = [l for l in content.strip().split('\n') if l.strip()]
