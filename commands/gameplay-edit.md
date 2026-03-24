@@ -1,306 +1,215 @@
 ---
-description: Edit gameplay videos into highlight reels or short-form clips
-argument-hint: <video_path> [--platform youtube|tiktok|both] [--language hu] [--score-threshold 70] [--duration 5m] [--mode analyze|auto] [--output path]
-allowed-tools: Bash(ffmpeg:*), Bash(ffprobe:*), Bash(python:*), Bash(python3:*), Bash(ls:*), Bash(mkdir:*), Bash(rm:*), Bash(cat:*), Bash(head:*), Bash(date:*), Bash(stat:*), Bash(mktemp:*), Bash(df:*)
+description: Edit gameplay videos into highlight reels and short-form clips
+argument-hint: <video_path> [--language hu] [--mode analyze|auto] [--output path]
+allowed-tools: Bash(ffmpeg:*), Bash(ffprobe:*), Bash(python:*), Bash(python3:*), Bash(ls:*), Bash(mkdir:*), Bash(rm:*), Bash(cat:*), Bash(head:*), Bash(date:*), Bash(stat:*), Bash(mktemp:*), Bash(df:*), Bash(start:*)
 ---
 
-# Gameplay Video Editor
+# Gameplay Video Editor (v4)
 
-You are editing a gameplay video into a highlight reel or short-form clips.
+You are editing a gameplay video into a highlight reel and short-form clips using a 4-phase pipeline: Prepare, Detect, Curate, Export.
 
 ## Parse Arguments
 
 From the user's input, extract:
 - **video_path** (required): path to the source video file
-- **platform** (default: `youtube`): one of `youtube`, `tiktok`, `both`
 - **language** (default: `hu`): Whisper language code
-- **score-threshold** (default: `70`): minimum score to include a moment (0-100). Used in both auto and analyze modes as the default filter.
-- **duration** (optional): target duration like `5m`, `10m`, `60s`. If provided, overrides score-threshold — selects the highest-scoring moments that fit within the target duration.
 - **mode** (default: `analyze`): one of `analyze`, `auto`
-- **output** (default: `Outs/<source_basename>_edit.mp4` relative to source video's parent directory). For TikTok clips, each file includes the moment's score: `<basename>_s<SCORE>_tk_<NN>.mp4`
+  - `analyze`: runs all 4 phases including the dashboard for curation
+  - `auto`: skips Phase 3 (dashboard), auto-selects strong clips (score > 70), exports immediately
+- **output** (default: `Outs/` relative to source video's parent directory)
+
+**Removed from v3:** `--platform`, `--score-threshold`, `--duration`. The v4 pipeline always produces both a highlight reel (YouTube-ready) and shorts (TikTok-ready). Score threshold is now in the style config (`detection_threshold`).
 
 ## Windows Compatibility
 
-**PYTHONUTF8=1**: All `python3`/`python` invocations MUST be prefixed with `PYTHONUTF8=1`. Windows defaults to cp1250 encoding which crashes on non-ASCII characters in stdout. This applies to every Python one-liner and heredoc script in the pipeline.
+**PYTHONUTF8=1**: All `python3`/`python` invocations MUST be prefixed with `PYTHONUTF8=1`.
 
-**ASCII-only output**: All printed output from Python scripts must use ASCII characters only. No `★`, `→`, `×`, `─` — use `*`, `->`, `x`, `-` instead.
+**ASCII-only output**: All printed output from Python scripts must use ASCII characters only.
 
 ## Validate
 
 1. Check the video file exists: `ls -la "<video_path>"`
 2. Check ffmpeg is available: `ffmpeg -version`
-3. Check video has audio tracks: `ffprobe -v quiet -print_format json -show_streams "<video_path>"` — if no stream has `codec_type == "audio"`, report "Error: No audio tracks found in source video" and stop
-4. Read the style file from this plugin's `styles/clean.md` — parse the YAML frontmatter for parameters
-5. Probe source video for resolution and fps:
-   ```bash
-   ffprobe -v quiet -print_format json -show_streams "<video_path>"
-   ```
-   Extract: width, height, fps (from `avg_frame_rate`).
-6. Create the output directory if it doesn't exist
-7. Estimate required disk space (source_size * 1.5) and warn if <2GB free
-8. Record pipeline start time:
-   ```bash
-   PIPELINE_START=$(date +%s%N)
-   ```
+3. Check video has audio tracks: `ffprobe -v quiet -print_format json -show_streams "<video_path>"` — if no audio, report error and stop
+4. Read the style file from this plugin's `styles/clean.md` — parse the YAML frontmatter for all parameters including v4 fields (`shorts_count`, `shorts_duration_range`, `detection_threshold`)
+5. Create the output directory if it doesn't exist
+6. Estimate required disk space (source_size * 2) and warn if <2GB free
 
 ## Check faster-whisper Availability
 
-Run `PYTHONUTF8=1 python3 -c "from faster_whisper import WhisperModel; print('ok')"` quietly. If it works, report: `"Running with faster-whisper (Full tier) — transcription + content analysis"`
-If not: `"faster-whisper not available — using volume-based analysis only (Minimal tier). Run /gameplay-setup for better results."`
+```bash
+PYTHONUTF8=1 python3 -c "from faster_whisper import WhisperModel; print('ok')"
+```
+
+If it works: `"Full tier — transcription + content analysis enabled"`
+If not: `"Minimal tier — audio-only analysis. Run /gameplay-setup for better results."`
+
+## Generate Session ID
+
+```bash
+SESSION_ID=$(PYTHONUTF8=1 python3 -c "import uuid; print(uuid.uuid4().hex[:12])")
+```
 
 ## Single Prompt (analyze mode only)
 
-If mode is `analyze` AND not all parameters were provided via CLI flags, present one prompt:
+If mode is `analyze` and language was not provided via CLI:
 
 ```
 Quick setup:
 - Language? (default: hu)
-- Platform? youtube / tiktok / both (default: youtube)
-- Score threshold? (default: 70) — include all moments above this score
 ```
 
-Parse the user's response flexibly:
-- They can answer all, some, or none (enter = all defaults)
-- Match answers to fields by keyword (e.g., "tiktok" → platform, "en" → language, "50" → score_threshold)
-- If ambiguous, ask for clarification
+Parse flexibly. If mode is `auto` or language was provided, skip.
 
-If mode is `auto` OR all parameters were provided via CLI flags, skip the prompt. Use defaults for any missing values.
-
-## Execute
-
-### Create temp directory
-
-Use Python's `tempfile` to create the temp directory — this ensures the path is a native Windows path that both bash and Python can resolve consistently. Do NOT use `mktemp -d "/tmp/..."` on Windows, as MSYS2/Git Bash maps `/tmp/` differently than Python.
+## Create Temp Directory
 
 ```bash
 TMP=$(PYTHONUTF8=1 python3 -c "import tempfile; print(tempfile.mkdtemp(prefix='gameplay-editor-'))")
 ```
 
-Verify the directory exists before proceeding: `ls -d "$TMP"`
+Verify: `ls -d "$TMP"`
 
-### Run Audio Analysis
+Record start time:
+```bash
+PIPELINE_START=$(date +%s%N)
+```
 
-Dispatch the **audio-analyzer** agent with:
+## Phase 1: PREPARE
+
+Report: `"[1/4] Preparing audio — detecting tracks, denoising, normalizing..."`
+
+Dispatch the **audio-preparer** agent with:
 - video_path
+- tmp_dir: $TMP
+- session_id: $SESSION_ID
+
+The agent returns: analysis_mix path, clean voice track paths, track map, noise profiles, LUFS offsets, source metadata, timing.
+
+## Phase 2: DETECT
+
+Report: `"[2/4] Detecting moments — scoring energy, transcribing, analyzing content..."`
+
+Dispatch the **moment-detector** agent with:
+- analysis_mix: from Phase 1 output
+- clean_voice_tracks: from Phase 1 output
+- track_map: from Phase 1 output
+- source_duration: from Phase 1 output
 - language
 - tmp_dir: $TMP
+- transcript_signals: from style config
+- detection_threshold: from style config (default 30)
+- has_whisper: true/false from availability check
 
-The agent returns a JSON result with all detected moments (preliminary 3-dim scores), per-window dimension arrays (`window_dimensions`), timing data, noise floor, and `has_transcript` flag.
+The agent returns: moment list with scores, descriptions, context zones, transcript data, timing.
 
-### Run Transcript Analysis (Full Tier only)
+## Phase 3: CURATE (analyze mode only)
 
-**Gate:** Only dispatch the transcript-analyzer if ALL of the following are true:
-1. The audio-analyzer's output has `has_transcript: true`
-2. The active style defines `transcript_signals` (parsed from frontmatter)
+**If mode is `auto`:** Skip Phase 3 entirely. Filter moments to only those with score > 70 (strong confidence). Construct a synthetic decisions object with all strong moments set to `action: "keep"`.
 
-If either condition is false, skip this step. Use the audio-analyzer's 3-dim scores as final scores and its original timestamps. The pipeline step count adjusts accordingly (3 steps in analyze mode, 2 in auto mode).
+**If mode is `analyze`:**
 
-**Partial transcript:** If `has_transcript` is `true` but the `.srt` only covers part of the video (Whisper partial failure), dispatch proceeds normally. The transcript-analyzer handles uncovered windows by scoring them 0.
+Report: `"[3/4] Building clip dashboard — N moments detected (M strong, K maybe)..."`
 
-If both conditions are true, dispatch the **transcript-analyzer** agent with:
-- transcript_srt: the `.srt` path from audio-analyzer output
-- moments: the audio-analyzer's full moment list
-- transcript_signals: from the active style's YAML frontmatter
-- language
-- source_duration: from audio-analyzer output
-- window_size: 5.0
+Dispatch the **dashboard-builder** agent with:
+- moments: from Phase 2 output
+- clean_voice_tracks: from Phase 1 output
+- track_map: from Phase 1 output
+- session_id: $SESSION_ID
+- source_video: video_path
+- tmp_dir: $TMP
+- has_transcript: from Phase 2 output
 
-The agent returns per-window Transcript scores, discovered moments, clip summaries, and refined cut boundaries.
+The agent returns: decisions (kept/removed/commented moments), summary, timing.
 
-### Recompute Composite Scores (Full Tier only)
+## Phase 4: EXPORT
 
-After receiving the transcript-analyzer's output, recompute scores using the Full Tier 5-dimension formula from `docs/scoring-weights.md`:
+Report: `"[4/4] Exporting highlight reel and shorts..."`
 
-    score = 0.20 x Volume + 0.25 x HighFreq + 0.15 x DynRange + 0.15 x Breadth + 0.25 x Transcript
+Dispatch the **export-assembler** agent with:
+- source_video_path: video_path
+- decisions: from Phase 3 output (or synthetic decisions in auto mode)
+- moments: from Phase 2 output (for scores, descriptions)
+- noise_profiles: from Phase 1 output
+- track_map: from Phase 1 output
+- lufs_offsets: from Phase 1 output
+- style: parsed style config
+- output_dir: resolved output path
+- source_width, source_height, source_fps: from Phase 1 output
+- shorts_count: from style config
+- shorts_duration_range: from style config
 
-For each 5-second window:
-1. Read the 3 audio dimensions from `window_dimensions` (audio-analyzer output)
-2. Read the Transcript score from `transcript_scores` (transcript-analyzer output)
-3. Compute Breadth: count how many of the 4 dimensions (Volume, HighFreq, DynRange, Transcript) have normalized value > 0.08. Breadth = `active_count / 4`
-4. Compute weighted sum
-
-**Merge discovered moments:**
-- For each discovered moment from transcript-analyzer, check if it overlaps with any existing audio-analyzer moment
-- If overlap: discard the discovered moment (the audio-analyzer already captured that region; the Transcript scores for those windows still contribute via recomputation)
-- If no overlap: add it to the moment list. Its 3 audio dimension scores come from `window_dimensions` for the corresponding windows. Its Transcript score comes from `transcript_scores`.
-
-**Apply merging and padding:**
-- Adjacent windows (within 10s) that both score above the session mean merge into one continuous segment
-- Segment score = peak window score within the segment
-- Add 2s lead-in and 1s lead-out padding (no overlap with neighbors)
-
-**Apply refined timestamps:**
-- For each moment, use the transcript-analyzer's `refined_start` and `refined_end` instead of the originals
-
-**Apply summaries:**
-- For each moment, replace `transcript_excerpt` with the transcript-analyzer's `summary`
-
-**Re-rank** all moments by composite score (descending).
-
-The moment list with refined timestamps and summaries is what gets passed to the **edit-assembler** in the Assembly step and presented to the user in analyze mode.
-
-### Present Plan (analyze mode)
-
-Present the plan to the user. Include ALL detected moments (not just selected ones), with moments above threshold clearly marked:
-
-```
-=== Analysis Results ===
-Source: recording.mkv (3h 24m)
-Score threshold: 70 | Platform: youtube
-
-All detected moments (37):
-  * #1  [Score: 95] 00:12:28 → 00:13:07 (39s)
-        Audio: Mass laughter, 3 voices overlapping, volume spike +12dB
-        Summary: "Mindenki egyszerre kiabál amikor a csapattárs véletlenül felrobbantja az egész bázist"
-
-  * #2  [Score: 88] 00:34:12 → 00:34:55 (43s)
-        Audio: 4s silence → sudden shouting, dramatic tension-release
-        Summary: "4 másodperc csend után hirtelen ordítás — NEEEEM! Várj... WHAT?!"
-
-  * #3  [Score: 75] 00:48:01 → 00:48:28 (27s)
-        Audio: Sustained high-freq energy (laughter), moderate volume
-        Summary: "Folyamatos nevetés — ez nem lehet igaz"
-
-    #4  [Score: 62] 01:05:18 → 01:05:42 (24s)
-        Audio: Brief volume spike, single speaker
-        Summary: "na jó, ez szar volt"
-
-    #5  [Score: 55] 01:22:10 → 01:22:35 (25s)
-        Audio: Moderate energy, no standout signals
-        Summary: "figyelj ide..."
-...
-
-* = above threshold (70) — will be included
-Total above threshold: 14 moments (6m 12s)
-Total below threshold: 23 moments
-```
-
-Each moment MUST include two description lines:
-- **Audio**: What's happening in the audio (volume spikes, laughter, silence, crosstalk, etc.)
-- **Summary**: Clip summary from transcript-analyzer (if available), or transcript excerpt as fallback
-
-Record user review start time. Wait for user response. They may:
-- Approve: "looks good", "go", "just do it" → proceed to assembly with moments above threshold
-- Set different threshold: "use score 60" or "lower to 50" → re-filter, re-present
-- Set target duration instead: "make it 3 min" → select top-scoring moments to fill duration
-- Include/exclude specific moments: "add #4", "remove #3" → update selection
-- Change platform: "also do tiktok" → note for assembly
-
-Record user review end time: `user_review_ms`.
-
-### Auto Mode
-
-Skip the plan presentation. Select moments automatically based on:
-- If `--duration` was provided: select top-scoring moments that fit within the target duration
-- Otherwise: include all moments with score ≥ `score-threshold` (default 70)
-
-Proceed directly to assembly.
-
-### Assembly
-
-Dispatch the **edit-assembler** agent with:
-- source_video_path
-- The approved/selected moment list
-- The style preset parameters (from YAML frontmatter)
-- platform: `youtube` or `tiktok`
-- output_path
-- noise_floor_db (from analyzer output)
-- source_width, source_height, source_fps
-
-**If platform is `both`:** dispatch the edit-assembler TWICE:
-1. First with platform=`youtube`, output=`<basename>_edit_yt.mp4`
-2. Then with platform=`tiktok`, output_dir for `<basename>_edit_tk_NN.mp4` files
-
-Collect timing data from the assembler's response.
+The agent returns: output file paths, sizes, durations, timing.
 
 ## Pipeline Summary
-
-After assembly completes, calculate total time and render the summary:
 
 ```bash
 PIPELINE_END=$(date +%s%N)
 TOTAL_MS=$(( (PIPELINE_END - PIPELINE_START) / 1000000 ))
 ```
 
-Present the summary:
-
+Present:
 ```
 === Pipeline Summary ===
 Source: <filename> (<source_duration>)
-Output: <output_path> (<output_duration>, <output_size>)
-Moments: <included> included, <excluded> excluded
-Score threshold: <threshold>
+
+Highlight reel: <highlight_path> (<duration>, <size>)
+Shorts: <N> clips generated
+  <short_1_path> (<duration>, <size>) — Score: <score>
+  <short_2_path> (<duration>, <size>) — Score: <score>
+
+Moments: <included> included, <removed> removed by user
+         <commented> had comments processed
 
 Timing:
-  Audio analysis:      <audio_analysis time> (probe + transcription + scoring)
-  Transcript analysis: <transcript_analysis time>  (only in Full Tier)
-  User review:         <user_review time>  (only in analyze mode)
-  Segment processing:  <segment_processing time>
-  Export:              <concat_export time>
+  Phase 1 (Prepare):  <time> (denoise + normalize)
+  Phase 2 (Detect):   <time> (scoring + transcription)
+  Phase 3 (Curate):   <time> (user curation in dashboard)
+  Phase 4 (Export):    <time> (mastering + encoding)
   ─────────────────────────
   Total:               <total time>
 
-Platform: <platform> | Tier: <tier> | Language: <language>
+Tier: <Full|Minimal> | Language: <language>
 ```
 
-For `platform=tiktok`, also list all produced clips:
+## Quick-Fix Loop (optional, one round)
+
+After presenting the summary, ask:
+
 ```
-Output clips (TikTok):
-  <filename>_s95_tk_01.mp4 (<duration>, <size>) — [Score: 95] "<description>"
-  <filename>_s88_tk_02.mp4 (<duration>, <size>) — [Score: 88] "<description>"
-  ...
+Watch the results and let me know if you'd like any corrections (one round):
+- "remove the clip at 1:45 in the highlight reel"
+- "short #2 audio is too quiet"
+- "add 5 more seconds to the ending"
+
+Or say "done" to finish.
 ```
 
-For `platform=both`, show both summaries.
+If the user provides corrections, the **command itself** (not the export-assembler) transforms them into modified decisions:
+- "remove the clip at 1:45" → find the moment containing 1:45, set `action: "remove"` in decisions
+- "short #2 audio is too quiet" → no decision change needed; pass a `corrections` note to the agent for re-mastering that short at +3dB
+- "add 5 more seconds to the ending" → extend the last moment's `end` by 5s in decisions
+
+Then re-dispatch the export-assembler with the modified decisions object. The export-assembler treats every dispatch identically — it has no concept of "first run" vs "correction run." It simply processes whatever decisions it receives.
+
+Present updated summary after re-export.
+
+If the user says "done" or similar, proceed to cleanup.
 
 ## Cleanup
-
-After the pipeline summary is presented, remove the main temp directory (`$TMP`) which contains intermediate files:
 
 ```bash
 rm -rf "$TMP"
 ```
 
-This reclaims disk space used by extracted audio, transcripts, and other intermediates.
-
-If the pipeline failed before assembly completed, preserve `$TMP` and report its path for debugging (same policy as the edit-assembler's own temp cleanup).
+Report: `"Temp files cleaned up. Done!"`
 
 ## Error Handling
 
 - Source video not found → report error, stop
 - ffmpeg not available → report install instructions, stop
 - No audio tracks → report error, stop
-- faster-whisper not available → warn, fall back to Minimal tier
-- No moments detected above threshold → report, suggest lowering threshold
+- faster-whisper not available → warn, continue with Minimal tier
+- No moments above detection_threshold → report, suggest checking audio quality
+- Dashboard timeout → report, suggest re-running `/gameplay-edit`
 - Segment processing fails → skip segment, continue, report at end
 - Disk space < 2GB → warn before starting
-
-## Progress Reporting
-
-Report at each stage. Step counts depend on whether the transcript-analyzer runs.
-
-**When transcript-analyzer runs — analyze mode (5 steps):**
-
-    [1/5] Analyzing audio tracks and transcribing (faster-whisper small)...
-    [2/5] Analyzing transcript for content signals...
-    [3/5] Computing final scores and merging moments...
-    [4/5] Presenting analysis for review... (N moments found, M above threshold)
-    [5/5] Assembling edit... segment N/M complete
-
-**When transcript-analyzer runs — auto mode (4 steps):**
-
-    [1/4] Analyzing audio tracks and transcribing (faster-whisper small)...
-    [2/4] Analyzing transcript for content signals...
-    [3/4] Computing final scores and merging moments...
-    [4/4] Assembling edit... segment N/M complete
-
-**When transcript-analyzer is skipped — analyze mode (3 steps):**
-
-    [1/3] Analyzing audio tracks and scoring moments...
-    [2/3] Presenting analysis for review... (N moments found, M above threshold)
-    [3/3] Assembling edit... segment N/M complete
-
-**When transcript-analyzer is skipped — auto mode (2 steps):**
-
-    [1/2] Analyzing audio tracks and scoring moments...
-    [2/2] Assembling edit... segment N/M complete
