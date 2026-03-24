@@ -5,7 +5,7 @@ description: Use when the user wants to edit gameplay videos, create highlight r
 
 # Gameplay Video Editor
 
-Transforms long gameplay recordings (1-4 hours) into highlight reels or short-form clips (15-60s) using score-based moment selection.
+Transforms long gameplay recordings (30 min - 5 hours) into highlight reels and short-form clips using a 4-phase pipeline: audio preparation, moment detection, browser-based curation, and deferred export.
 
 ## When to Use
 
@@ -17,49 +17,40 @@ Transforms long gameplay recordings (1-4 hours) into highlight reels or short-fo
 
 ## How It Works
 
-This skill delegates to two commands and two agents:
+This skill delegates to two commands and four agents:
 
 1. **`/gameplay-setup`** — One-time setup (install Whisper, verify ffmpeg)
-2. **`/gameplay-edit <path>`** — Main workflow:
-   - Prompts for language, platform, and score threshold
-   - **audio-analyzer agent** detects and scores ALL moments via audio analysis
-   - In analyze mode: presents ALL moments with detailed descriptions (audio + transcript), marks ones above threshold
-   - User can approve, adjust threshold, or set a target duration to filter by top scores
-   - **edit-assembler agent** processes audio and exports the final video
+2. **`/gameplay-edit <path>`** — Main 4-phase workflow:
+   - **Phase 1 (Prepare):** audio-preparer agent — detects tracks, denoises, normalizes voice levels
+   - **Phase 2 (Detect):** moment-detector agent — scores energy + transcripts, over-detects moments
+   - **Phase 3 (Curate):** dashboard-builder agent — opens HTML dashboard in browser with audio previews for keep/remove/comment decisions
+   - **Phase 4 (Export):** export-assembler agent — masters audio, assembles highlight reel + auto-generates shorts
 
 ## Quick Start
 
 If the user provides a video path, invoke `/gameplay-edit` with it.
 If the user asks about setup or dependencies, invoke `/gameplay-setup`.
 
-## Clip Selection
+## Modes
 
-Score-threshold-based (not duration-based):
-- **Auto mode**: Include all moments above `--score-threshold` (default 70)
-- **Analyze mode**: Show ALL moments with descriptions, mark ones above threshold. User can:
-  - Approve the threshold selection
-  - Change to a different score threshold
-  - Set a target duration (top-scoring moments to fill the time)
-  - Include/exclude specific moments manually
+- **analyze** (default): All 4 phases — includes browser dashboard for curation
+- **auto**: Skips Phase 3 — auto-selects strong clips (score > 70), exports immediately
 
-## Platforms
+## Output
 
-Target platform is asked separately:
-- **youtube** — 16:9, single highlight reel
-- **tiktok** — 9:16, multiple individual short clips (15-60s each)
-- **both** — exports both formats from the same moments
+Always produces both:
+- **Highlight reel** — single MP4, YouTube-ready (16:9, -16 LUFS)
+- **Shorts** — multiple MP4s, TikTok/Reels-ready (9:16, -12 LUFS, 15-60s each)
 
 ## Detection
 
-Pure audio analysis scores moments by:
-- Voice volume spikes (25-30%)
-- Laughter/screaming via high-frequency energy (20-25%)
-- Simultaneous speakers / crosstalk (15-20%)
-- Tension-release: silence→explosion patterns (15%)
-- Signal breadth bonus (10-15%)
-- Transcript excitement via LLM analysis (10%, Full tier only)
-- Exclamation bonus from transcript (`!`, ALL CAPS, repeated letters)
+Voice is the content. Scoring prioritizes:
+- Transcript analysis via LLM (40% weight in Full tier)
+- High-frequency energy — laughter, screaming (20%)
+- Volume spikes (15%)
+- Signal breadth — multiple signals firing (15%)
+- Dynamic range (10%)
 
 Two tiers:
-- **Full** (faster-whisper installed, default): transcription + all signals + transcript-analyzer
-- **Minimal** (ffmpeg only): volume + audio signal based detection
+- **Full** (faster-whisper installed): transcription + all signals + LLM analysis
+- **Minimal** (ffmpeg only): audio energy-based detection
