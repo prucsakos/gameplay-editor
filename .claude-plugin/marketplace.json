@@ -6,8 +6,8 @@
   "plugins": [
     {
       "name": "gameplay-editor",
-      "description": "Transform long gameplay recordings into highlight reels and short-form clips using AI-powered audio + visual analysis",
-      "version": "3.0.0",
+      "description": "Transform long gameplay recordings into highlight reels and short-form clips using audio analysis and browser-based clip curation",
+      "version": "4.0.0",
       "source": {
         "source": "github",
         "repo": "prucsakos/gameplay-editor"
