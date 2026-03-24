@@ -144,6 +144,8 @@ LLM reads transcript in 2-minute chunks with 15-second overlap at boundaries. Ea
 
 Overlap windows take the higher score from either chunk. For a 2-hour recording (~60 chunks), this stays well within context limits per call.
 
+**Failure handling:** If LLM transcript scoring fails (timeout, malformed output), retry once. If still failing, fall back to Minimal Tier weights (audio-only) for affected chunks and warn user. The pipeline continues — degraded scoring is better than no output.
+
 This is where the LLM understands *meaning*, not just volume.
 
 ### Step 4: Moment Assembly
@@ -169,7 +171,7 @@ score = 0.25 × Volume + 0.35 × HighFreq + 0.20 × DynRange + 0.20 × Breadth
 - Include everything scoring above 30
 - Adjacent high-scoring windows merge into single moments (2s lead-in, 1s lead-out padding — asymmetric to capture buildup)
 - Overlapping moments merge
-- Context zones (10s each side) are clamped to video boundaries and cannot overlap with neighboring moments' core boundaries
+- Context zones (10s each side) are clamped to video boundaries and truncated at neighboring moments' core boundaries (e.g., if moment A ends at 120s and moment B starts at 125s, A's context zone extends to 124s, not 130s)
 - Each moment gets:
   - Start/end timestamps
   - Extended context zone: 10s before, 10s after (for "hear more" in dashboard)
@@ -274,9 +276,10 @@ All decisions stored in `decisions.json` next to the HTML. Schema:
 
 ### Polling Mechanism
 
-- Agent checks for `decisions.json` every 5 seconds using `test -f`
+- Agent checks for `decisions.json` every 5 seconds using Python: `os.path.exists()` (cross-platform, consistent with Windows compatibility approach)
 - Timeout after 30 minutes with a message: "Dashboard timed out. Run `/gameplay-edit --resume` to reopen."
 - If user closes browser without saving, the JSON won't exist and the timeout catches it
+- Stale detection: the JSON includes a `session_id` field matching one generated at pipeline start; mismatched IDs are ignored
 
 ---
 
