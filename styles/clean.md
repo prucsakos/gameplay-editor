@@ -14,6 +14,9 @@ transcript_signals:
   - storytelling peaks
   - emotional outbursts
   - comedic timing
+shorts_count: 3
+shorts_duration_range: [15, 60]
+detection_threshold: 30
 ---
 
 # Clean Style
