@@ -1,139 +1,92 @@
-# Gameplay Editor — Pipeline Flow
+# Gameplay Editor — Pipeline Flow (v4)
 
 ```mermaid
 flowchart TD
-    START([Start]) --> PARSE[Parse Arguments<br/>video_path, platform, language,<br/>score-threshold, duration, mode, output]
-    PARSE --> VALIDATE[Validate<br/>- Video exists<br/>- ffmpeg available<br/>- Audio tracks present<br/>- Read style file<br/>- Probe resolution & fps<br/>- Create output dir<br/>- Check disk space]
+    START([Start]) --> PARSE[Parse Arguments<br/>video_path, language, mode, output]
+    PARSE --> VALIDATE[Validate<br/>- Video exists<br/>- ffmpeg available<br/>- Audio tracks present<br/>- Read style config<br/>- Create output dir<br/>- Check disk space]
     VALIDATE --> WHISPER_CHECK{faster-whisper<br/>available?}
     WHISPER_CHECK -->|yes| TIER_FULL[Full tier]
     WHISPER_CHECK -->|no| TIER_MINIMAL[Minimal tier]
-    TIER_FULL --> PROMPT_CHECK
-    TIER_MINIMAL --> PROMPT_CHECK
+    TIER_FULL --> SESSION
+    TIER_MINIMAL --> SESSION
 
-    PROMPT_CHECK{mode == analyze<br/>AND missing params?}
-    PROMPT_CHECK -->|yes| PROMPT[Present single prompt<br/>language, platform, threshold]
-    PROMPT_CHECK -->|no| TMP
-    PROMPT --> TMP
+    SESSION[Generate session_id<br/>Create temp directory<br/>Start PIPELINE timer]
 
-    TMP[Create temp directory - $TMP<br/>Start PIPELINE timer]
+    SESSION --> P1
 
-    TMP --> AA
-
-    subgraph AA [Audio Analyzer Agent]
+    subgraph P1 [Phase 1: PREPARE — audio-preparer agent]
         direction TB
-        AA_IN[/Inputs: video_path, language,<br/>tmp_dir/]
-        AA_IN --> AA_S1[Stage 1 — Track Detection<br/>ffprobe streams, classify voice vs game,<br/>measure avg loudness]
-        AA_S1 --> AA_S2_CHECK{faster-whisper<br/>available?}
-
-        AA_S2_CHECK -->|yes| AA_S2[Stage 2 — Transcription<br/>Extract voice track to WAV<br/>WhisperModel small, vad_filter=True<br/>Output: voice.srt]
-        AA_S2_CHECK -->|no| AA_S2_SKIP[Skip transcription<br/>has_transcript = false]
-
-        AA_S2 --> AA_S3
-        AA_S2_SKIP --> AA_S3
-
-        AA_S3[Stage 3 — Energy Scoring<br/>All on source video voice track]
-        AA_S3 --> AA_LOUD[Loudness Analysis<br/>ebur128 per 5s window<br/>session mean & stddev]
-        AA_S3 --> AA_HF[High-Freq Energy<br/>2-4kHz band per 5s window]
-        AA_S3 --> AA_SIL[Silence Detection<br/>silencedetect -35dB d=3]
-
-        AA_LOUD --> AA_NOISE[Noise Floor Measurement<br/>from longest silence ≥3s]
-        AA_SIL --> AA_NOISE
-        AA_SIL --> AA_TENSION[Tension-Release Detection<br/>silence ≥3s then loudness delta]
-        AA_HF --> AA_CROSS[Crosstalk Detection<br/>multi-track or Whisper gap heuristic]
-
-        AA_NOISE --> AA_SCORE[Composite Scoring — Minimal Tier<br/>0.25 Vol + 0.35 HF + 0.20 DynRange + 0.20 Breadth]
-        AA_TENSION --> AA_SCORE
-        AA_CROSS --> AA_SCORE
-        AA_LOUD --> AA_SCORE
-
-        AA_SCORE --> AA_MERGE[Normalize 0-100<br/>Merge adjacent windows within 10s<br/>Add 2s lead-in, 1s lead-out]
-        AA_MERGE --> AA_OUT[/Output: moments, window_dimensions,<br/>noise_floor_db, has_transcript,<br/>transcript_srt, timing/]
+        P1_IN[/Inputs: video_path, tmp_dir, session_id/]
+        P1_IN --> P1_S1[Track Detection<br/>ffprobe streams, classify voice vs game]
+        P1_S1 --> P1_S2[Noise Profiling<br/>silencedetect, astats RMS,<br/>calibrate afftdn nr]
+        P1_S2 --> P1_S3[Denoising<br/>afftdn nt=w on each voice track<br/>analysis copies only]
+        P1_S3 --> P1_S4[Voice Normalization<br/>ebur128 measurement,<br/>loudnorm to -16 LUFS]
+        P1_S4 --> P1_S5[Analysis Mix<br/>normalized voices + game audio at -6dB]
+        P1_S5 --> P1_OUT[/Output: analysis_mix, clean_voice_tracks,<br/>noise_profiles, lufs_offsets, track_map/]
     end
 
-    AA --> TA_GATE
+    P1 --> P2
 
-    TA_GATE{has_transcript?<br/>AND style has<br/>transcript_signals?}
-
-    TA_GATE -->|no — skip| SELECTION
-    TA_GATE -->|yes| TA
-
-    subgraph TA [Transcript Analyzer Agent]
+    subgraph P2 [Phase 2: DETECT — moment-detector agent]
         direction TB
-        TA_IN[/Inputs: transcript_srt, moments,<br/>transcript_signals, language,<br/>source_duration, window_size/]
-        TA_IN --> TA_S1[Step 1 — Parse SRT<br/>Map segments to 5s windows]
-        TA_S1 --> TA_S2[Step 2 — Window Scoring<br/>Score 0-10 per window<br/>based on transcript_signals<br/>Normalize to 0-1]
-        TA_S2 --> TA_S3[Step 3 — Moment Discovery<br/>High-score windows outside<br/>existing moments]
-        TA_S3 --> TA_S4[Step 4 — Clip Summaries<br/>1-2 sentences per moment<br/>in transcript language]
-        TA_S4 --> TA_S5[Step 5 — Cut Boundary Refinement<br/>Align to sentence edges ±3s max]
-        TA_S5 --> TA_OUT[/Output: transcript_scores,<br/>discovered_moments,<br/>moment_refinements/]
+        P2_IN[/Inputs: analysis_mix, clean_voice_tracks,<br/>transcript_signals, detection_threshold/]
+        P2_IN --> P2_S1[Energy Scoring<br/>ebur128, highfreq 2-4kHz, dyn_range<br/>per 5s window, normalize 0-1]
+        P2_S1 --> P2_WHISPER{has_whisper?}
+        P2_WHISPER -->|yes| P2_S2[Transcription<br/>faster-whisper small per voice track<br/>speaker-labeled merged SRT]
+        P2_WHISPER -->|no| P2_S4_MIN[Minimal Tier Scoring<br/>0.25 Vol + 0.35 HF + 0.20 DR + 0.20 Breadth]
+        P2_S2 --> P2_S3[Transcript Scoring — LLM<br/>2-min chunks, 15s overlap<br/>score 0-10 per window per transcript_signals]
+        P2_S3 --> P2_S4[Full Tier Scoring<br/>0.15 Vol + 0.20 HF + 0.10 DR<br/>+ 0.15 Breadth + 0.40 Transcript]
+        P2_S4 --> P2_MERGE
+        P2_S4_MIN --> P2_MERGE
+        P2_MERGE[Over-Detection<br/>threshold=30, merge adjacent,<br/>2s lead-in, 1s lead-out,<br/>10s context zones,<br/>strong/maybe confidence tiers]
+        P2_MERGE --> P2_OUT[/Output: moments with scores,<br/>descriptions, context zones,<br/>transcript data/]
     end
 
-    TA --> RECOMPUTE[Recompute Composite Scores — Full Tier<br/>0.20 Vol + 0.25 HF + 0.15 DynRange<br/>+ 0.15 Breadth + 0.25 Transcript<br/><br/>Merge discovered moments<br/>Apply refined timestamps & summaries<br/>Re-rank by composite score]
+    P2 --> MODE_CHECK{mode?}
 
-    RECOMPUTE --> SELECTION
+    MODE_CHECK -->|analyze| P3
+    MODE_CHECK -->|auto| AUTO_SELECT[Auto-select strong clips<br/>score > 70]
+    AUTO_SELECT --> P4
 
-    SELECTION{mode?}
-    SELECTION -->|analyze| PRESENT[Present Plan<br/>All moments with scores,<br/>descriptions, summaries<br/>* = above threshold]
-    PRESENT --> USER_RESPONSE[Wait for user<br/>approve / adjust threshold /<br/>include-exclude / change platform]
-    USER_RESPONSE --> ASSEMBLY
-
-    SELECTION -->|auto + duration| AUTO_DUR[Select top moments<br/>fitting target duration]
-    SELECTION -->|auto| AUTO_THR[Select moments ≥ threshold]
-    AUTO_DUR --> ASSEMBLY
-    AUTO_THR --> ASSEMBLY
-
-    ASSEMBLY --> EA
-
-    subgraph EA [Edit Assembler Agent]
+    subgraph P3 [Phase 3: CURATE — dashboard-builder agent]
         direction TB
-        EA_IN[/Inputs: source_video_path, moments,<br/>style, platform, output_path,<br/>noise_floor_db, resolution, fps/]
-
-        EA_IN --> EA_SETUP[Setup<br/>Create temp dir, check disk space,<br/>determine LUFS]
-        EA_SETUP --> EA_SEG_LOOP
-
-        subgraph EA_SEG_LOOP [Step 1 — Process Each Segment]
-            direction TB
-            EA_EXTRACT[Single-input ffmpeg<br/>from source video]
-            EA_EXTRACT --> EA_AF[Audio filters<br/>HPF 80Hz → afade in → loudnorm → agate → acompressor → afade out]
-            EA_AF --> EA_VF[Apply video filters<br/>platform crop, transitions, fade]
-            EA_VF --> EA_SEG_OUT[segment_N.mp4]
-        end
-
-        EA_SEG_LOOP --> EA_TK_CHECK{platform?}
-
-        EA_TK_CHECK -->|tiktok| EA_TK[Step 2 — TikTok Post-Processing<br/>Peak 5-10s trim<br/>Clip duration rules 15s-60s]
-        EA_TK_CHECK -->|youtube| EA_EXPORT
-
-        EA_TK --> EA_EXPORT
-
-        subgraph EA_EXPORT [Step 3 — Export]
-            direction TB
-            EA_PLATFORM{platform?}
-            EA_PLATFORM -->|youtube| EA_CONCAT[Concat all segments<br/>ffmpeg -f concat -c copy<br/>single output file]
-            EA_PLATFORM -->|tiktok| EA_CLIPS[Copy each segment as clip<br/>basename_sSCORE_tk_NN.mp4]
-        end
-
-        EA_EXPORT --> EA_CLEANUP[Step 4 — Cleanup<br/>rm -rf $TMP if success]
-        EA_CLEANUP --> EA_OUT[/Output: output_files,<br/>segments_included,<br/>segments_skipped, timing/]
+        P3_IN[/Inputs: moments, clean_voice_tracks,<br/>session_id, source_video/]
+        P3_IN --> P3_S1[Extract Audio Previews<br/>core MP3 + extended MP3 per moment]
+        P3_S1 --> P3_S2[Generate Dashboard HTML<br/>clip cards, audio players,<br/>keep/remove, boundary adjust, comments]
+        P3_S2 --> P3_S3[Open in Browser<br/>start dashboard.html]
+        P3_S3 --> P3_S4[Poll for decisions.json<br/>5s interval, 30min timeout,<br/>session_id validation]
+        P3_S4 --> P3_OUT[/Output: decisions<br/>kept/removed/commented moments/]
     end
 
-    EA --> SUMMARY
+    P3 --> P4
 
-    SUMMARY[Pipeline Summary<br/>Source & output info<br/>Moments included / excluded<br/><br/>Timing: Audio analysis<br/>Transcript analysis - User review<br/>Segment processing - Export - Total<br/><br/>Platform - Tier - Language]
+    subgraph P4 [Phase 4: EXPORT — export-assembler agent]
+        direction TB
+        P4_IN[/Inputs: decisions, moments,<br/>noise_profiles, track_map,<br/>style, output_dir/]
+        P4_IN --> P4_S1[Process Feedback<br/>interpret comments, apply boundary changes,<br/>tag shorts, sort chronologically]
+        P4_S1 --> P4_S2[Audio Mastering — from raw tracks<br/>HPF → afftdn → agate → acompressor → loudnorm<br/>per-speaker normalization]
+        P4_S2 --> P4_S3[Highlight Reel<br/>extract segments, transitions,<br/>concat to single MP4]
+        P4_S3 --> P4_S4[Shorts Generation<br/>top N by score + user-tagged,<br/>9:16 crop, -12 LUFS, 15-60s]
+        P4_S4 --> P4_OUT[/Output: highlight.mp4,<br/>short_01.mp4, short_02.mp4, .../]
+    end
 
-    SUMMARY --> DONE([Done])
+    P4 --> SUMMARY[Pipeline Summary<br/>files, sizes, durations, timing]
+    SUMMARY --> QUICKFIX{User wants<br/>corrections?}
+    QUICKFIX -->|yes| P4
+    QUICKFIX -->|no| CLEANUP[Cleanup temp files]
+    CLEANUP --> DONE([Done])
 
-    style AA fill:#2d3a5a,stroke:#49a,color:#fff
-    style TA fill:#4a2d5a,stroke:#94a,color:#fff
-    style EA fill:#5a3a2d,stroke:#a94,color:#fff
-    style EA_SEG_LOOP fill:#6b4a35,stroke:#a94,color:#fff
-    style EA_EXPORT fill:#6b4a35,stroke:#a94,color:#fff
+    style P1 fill:#2d3a5a,stroke:#49a,color:#fff
+    style P2 fill:#4a2d5a,stroke:#94a,color:#fff
+    style P3 fill:#2d5a3a,stroke:#4a9,color:#fff
+    style P4 fill:#5a3a2d,stroke:#a94,color:#fff
 ```
 
 ## Legend
 
-| Color | Component | File |
-|-------|-----------|------|
-| Blue | Audio Analyzer Agent | `agents/audio-analyzer.md` |
-| Purple | Transcript Analyzer Agent | `agents/transcript-analyzer.md` |
-| Orange | Edit Assembler Agent | `agents/edit-assembler.md` |
+| Color | Phase | Agent |
+|-------|-------|-------|
+| Blue | Phase 1: Prepare | `agents/audio-preparer.md` |
+| Purple | Phase 2: Detect | `agents/moment-detector.md` |
+| Green | Phase 3: Curate | `agents/dashboard-builder.md` |
+| Orange | Phase 4: Export | `agents/export-assembler.md` |
