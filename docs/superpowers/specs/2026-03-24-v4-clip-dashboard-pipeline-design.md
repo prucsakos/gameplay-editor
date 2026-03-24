@@ -236,6 +236,7 @@ All decisions stored in `decisions.json` next to the HTML. Schema:
 ```json
 {
   "version": 1,
+  "session_id": "a1b2c3d4e5f6",
   "source_video": "path/to/recording.mkv",
   "moments": [
     {
