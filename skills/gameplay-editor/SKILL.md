@@ -26,6 +26,8 @@ This skill delegates to two commands and four agents:
    - **Phase 3 (Curate):** dashboard-builder agent — opens HTML dashboard in browser with audio previews for keep/remove/comment decisions
    - **Phase 4 (Export):** export-assembler agent — masters audio, assembles highlight reel + auto-generates shorts
 
+The dashboard template lives in `templates/dashboard.html` (plugin root). The dashboard-builder agent reads it and injects moment data — it never generates HTML from scratch.
+
 ## Quick Start
 
 If the user provides a video path, invoke `/gameplay-edit` with it.
