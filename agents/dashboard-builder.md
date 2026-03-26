@@ -25,27 +25,28 @@ You receive:
 
 All Python invocations MUST be prefixed with `PYTHONUTF8=1`. Dashboard opened with `start` command on Windows.
 
-## Step 1: Extract Audio Previews
+## Step 1: Extract Previews
 
-For each moment, extract two audio clips from the clean voice tracks:
+For each moment, extract one video clip and one extended audio clip.
 
-### Core preview (the detected moment)
+### Video preview (the detected moment)
 
-If single voice track:
 ```bash
-ffmpeg -ss <moment.start> -t <moment.duration> -i "<clean_voice_track_0>" \
-  -c:a libmp3lame -b:a 128k -y "<tmp_dir>/preview_<id>.mp3"
+ffmpeg -ss <moment.start> -t <moment.duration> -i "<source_video>" \
+  -vf scale=-2:300 \
+  -c:v libx264 -crf 28 -preset fast \
+  -c:a aac -b:a 64k \
+  -y "<tmp_dir>/preview_<id>.mp4"
 ```
 
-If multiple voice tracks, mix them:
-```bash
-ffmpeg -ss <moment.start> -t <moment.duration> -i "<clean_voice_track_0>" \
-  -ss <moment.start> -t <moment.duration> -i "<clean_voice_track_1>" \
-  -filter_complex "[0:a][1:a]amix=inputs=2:duration=first" \
-  -c:a libmp3lame -b:a 128k -y "<tmp_dir>/preview_<id>.mp3"
-```
+- Resolution: 300p height, auto width (`scale=-2:300`)
+- Codec: H.264/AAC, fast preset, CRF 28 — plays in all modern browsers
+- Audio is raw (undenoised) from source_video — acceptable for scrubbing
+- Output: `preview_<id>.mp4`
 
-### Extended preview (context zone — for "hear more")
+Report progress after each clip: `"Extracting video preview N/M..."`
+
+### Extended audio preview (context zone — retained, not shown in v2 UI)
 
 ```bash
 ffmpeg -ss <moment.context_start> -t <context_duration> -i "<clean_voice_track_0>" \
@@ -55,7 +56,7 @@ ffmpeg -ss <moment.context_start> -t <context_duration> -i "<clean_voice_track_0
 
 Where `context_duration = moment.context_end - moment.context_start`.
 
-Report progress: `"Extracting audio preview N/M..."`
+Report progress after each clip: `"Extracting extended audio N/M..."`
 
 ## Step 2: Generate Dashboard HTML
 
