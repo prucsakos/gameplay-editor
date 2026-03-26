@@ -173,6 +173,7 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #111; color: 
   display: none;
   position: fixed;
   inset: 0;
+  z-index: 200;
   background: #111;
   align-items: center;
   justify-content: center;
@@ -263,7 +264,9 @@ function setStart(idx) {
   var video = document.getElementById('video-' + idx);
   var m     = moments[idx];
   var abs   = m.start + video.currentTime;
-  abs = Math.max(m.context_start, Math.min(m.context_end, abs));
+  var ctxStart = m.context_start != null ? m.context_start : m.start;
+  var ctxEnd   = m.context_end   != null ? m.context_end   : m.end;
+  abs = Math.max(ctxStart, Math.min(ctxEnd, abs));
   decisions[idx].start = abs;
   document.getElementById('trim-label-' + idx).textContent =
     fmt(abs) + ' \u2192 ' + fmt(decisions[idx].end);
@@ -273,7 +276,9 @@ function setEnd(idx) {
   var video = document.getElementById('video-' + idx);
   var m     = moments[idx];
   var abs   = m.start + video.currentTime;
-  abs = Math.max(m.context_start, Math.min(m.context_end, abs));
+  var ctxStart = m.context_start != null ? m.context_start : m.start;
+  var ctxEnd   = m.context_end   != null ? m.context_end   : m.end;
+  abs = Math.max(ctxStart, Math.min(ctxEnd, abs));
   decisions[idx].end = abs;
   document.getElementById('trim-label-' + idx).textContent =
     fmt(decisions[idx].start) + ' \u2192 ' + fmt(abs);
