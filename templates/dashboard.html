@@ -231,6 +231,9 @@ var decisions = moments.map(function(m) {
            original_start: m.start, original_end: m.end, comment: '' };
 });
 
+var pass = 1;
+var pass1Decisions = null;
+
 function fmt(s) {
   var h  = Math.floor(s / 3600);
   var m  = Math.floor((s % 3600) / 60);
@@ -389,6 +392,7 @@ function buildCards() {
     var input = document.createElement('input');
     input.type        = 'text';
     input.placeholder = 'Note for export agent...';
+    input.value       = decisions[idx].comment;
     input.setAttribute('data-idx', idx);
     input.addEventListener('input', function() {
       decisions[parseInt(this.getAttribute('data-idx'), 10)].comment = this.value;
@@ -411,16 +415,70 @@ function approveAll() {
 }
 
 function saveAndClose() {
-  var boundaryAdjusted = decisions.filter(function(d) {
+  if (pass === 1 && decisions.some(function(d) { return d.comment.trim(); })) {
+    startPass2();
+    return;
+  }
+  finalSave();
+}
+
+function startPass2() {
+  pass = 2;
+  pass1Decisions = decisions.slice();
+
+  var flaggedMoments = [];
+  var flaggedDecisions = [];
+  moments.forEach(function(m, idx) {
+    if (decisions[idx].comment.trim()) {
+      flaggedMoments.push(m);
+      flaggedDecisions.push({
+        id:             decisions[idx].id,
+        action:         decisions[idx].action,
+        start:          decisions[idx].start,
+        end:            decisions[idx].end,
+        original_start: decisions[idx].original_start,
+        original_end:   decisions[idx].original_end,
+        comment:        decisions[idx].comment
+      });
+    }
+  });
+
+  moments   = flaggedMoments;
+  decisions = flaggedDecisions;
+
+  document.getElementById('cards').textContent = '';
+  buildCards();
+  updateTally();
+
+  document.getElementById('source-name').textContent = 'Pass 2 \u2014 Review flagged clips';
+  document.getElementById('tier-summary').textContent =
+    moments.length + ' clip' + (moments.length !== 1 ? 's' : '') + ' flagged for review';
+
+  window.scrollTo(0, 0);
+}
+
+function finalSave() {
+  var mergedDecisions = pass1Decisions ? pass1Decisions.slice() : decisions.slice();
+  if (pass === 2) {
+    decisions.forEach(function(d2) {
+      for (var i = 0; i < mergedDecisions.length; i++) {
+        if (mergedDecisions[i].id === d2.id) { mergedDecisions[i] = d2; break; }
+      }
+    });
+  }
+
+  var boundaryAdjusted = mergedDecisions.filter(function(d) {
     return d.start !== d.original_start || d.end !== d.original_end;
   }).length;
+
   var payload = {
     version: 1,
     session_id: SESSION_ID,
     source_video: SOURCE_VIDEO,
     boundary_adjusted: boundaryAdjusted,
-    moments: decisions
+    moments: mergedDecisions
   };
+
   fetch('http://localhost:' + SERVER_PORT + '/save', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
