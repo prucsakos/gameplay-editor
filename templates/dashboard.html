@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Clip Curation Dashboard</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Segoe UI', system-ui, sans-serif; background: #111; color: #ddd; min-height: 100vh; }
+
+#guide {
+  background: #1a221a;
+  border-bottom: 1px solid #253525;
+  padding: 7px 20px;
+  font-size: 12px;
+  color: #7aaa7a;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+#guide strong { color: #9aca9a; }
+
+#page-header {
+  padding: 14px 20px;
+  background: #161616;
+  border-bottom: 1px solid #222;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+#page-header h1 { font-size: 15px; font-weight: 600; color: #eee; }
+.meta { font-size: 12px; color: #777; margin-top: 2px; }
+#approve-all {
+  background: none;
+  border: 1px solid #383838;
+  color: #777;
+  padding: 4px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+}
+#approve-all:hover { border-color: #555; color: #aaa; }
+
+#cards { padding: 16px 20px; max-width: 860px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
+
+.card {
+  background: #1a1a1a;
+  border-radius: 7px;
+  border-left: 4px solid #2a5a2a;
+  overflow: hidden;
+  transition: opacity 0.2s;
+}
+.card.maybe   { border-left-color: #6a4e00; opacity: 0.80; }
+.card.removed { border-left-color: #5a1818; opacity: 0.3;  }
+
+.card-header {
+  padding: 9px 13px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+  background: #161616;
+}
+.clip-num { font-size: 13px; font-weight: 700; color: #ccc; min-width: 28px; }
+.badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 3px;
+  letter-spacing: 0.05em;
+}
+.badge.strong { background: #183018; color: #6aca6a; }
+.badge.maybe  { background: #32240a; color: #caa020; }
+.score { font-size: 12px; color: #666; }
+.timestamps { font-size: 12px; color: #999; font-variant-numeric: tabular-nums; margin-left: auto; }
+
+.card video {
+  width: 100%;
+  display: block;
+  background: #000;
+  max-height: 220px;
+}
+
+.trim-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 13px;
+  background: #131313;
+}
+.trim-btn {
+  background: #222;
+  border: 1px solid #333;
+  color: #bbb;
+  padding: 5px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.trim-btn:hover { background: #2a2a2a; border-color: #505050; color: #eee; }
+.trim-label {
+  font-size: 11px;
+  color: #777;
+  font-variant-numeric: tabular-nums;
+  flex: 1;
+  text-align: center;
+}
+
+.decision-row { display: flex; gap: 8px; padding: 8px 13px; }
+.btn-keep, .btn-remove {
+  flex: 1;
+  padding: 9px 0;
+  border: 2px solid transparent;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  transition: all 0.12s;
+}
+.btn-keep          { background: #182818; border-color: #285828; color: #5aba5a; }
+.btn-keep:hover    { background: #1d331d; border-color: #3a7a3a; }
+.btn-keep.active   { background: #1f4a1f; border-color: #4a9a4a; color: #80d880; }
+.btn-remove        { background: #281818; border-color: #582828; color: #ba5a5a; }
+.btn-remove:hover  { background: #331d1d; border-color: #7a3a3a; }
+.btn-remove.active { background: #4a1f1f; border-color: #9a4a4a; color: #d88080; }
+
+.comment-row { padding: 0 13px 10px; }
+.comment-row input {
+  width: 100%;
+  background: #131313;
+  border: 1px solid #252525;
+  color: #bbb;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: inherit;
+}
+.comment-row input:focus { outline: none; border-color: #3a3a3a; }
+.comment-row input::placeholder { color: #484848; }
+
+#footer {
+  position: sticky;
+  bottom: 0;
+  background: #161616;
+  border-top: 1px solid #222;
+  padding: 11px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  z-index: 100;
+}
+#tally { font-size: 13px; color: #777; }
+#save-btn {
+  background: #183a18;
+  border: 2px solid #2a6a2a;
+  color: #80d880;
+  padding: 9px 36px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 700;
+  transition: all 0.12s;
+}
+#save-btn:hover { background: #1f4d1f; border-color: #3a8a3a; color: #9ae89a; }
+
+#saved-screen {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: #111;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 14px;
+  color: #80d880;
+  font-size: 20px;
+}
+#saved-screen p { color: #666; font-size: 14px; }
+</style>
+</head>
+<body>
+
+<div id="guide">
+  <strong>Clip Curation Guide</strong> &nbsp;&middot;&nbsp;
+  Play a clip &nbsp;&middot;&nbsp;
+  Pause and stamp <strong>Set Start / End Here</strong> to trim &nbsp;&middot;&nbsp;
+  <strong>Keep</strong> or <strong>Remove</strong> &nbsp;&middot;&nbsp;
+  Add a note &nbsp;&middot;&nbsp;
+  <strong>Save &amp; Close</strong> when done
+</div>
+
+<div id="page-header">
+  <div>
+    <h1 id="source-name"></h1>
+    <div class="meta" id="tier-summary"></div>
+  </div>
+  <button id="approve-all" onclick="approveAll()">Approve All</button>
+</div>
+
+<div id="cards"></div>
+
+<div id="footer">
+  <span id="tally"></span>
+  <button id="save-btn" onclick="saveAndClose()">Save &amp; Close</button>
+</div>
+
+<div id="saved-screen">
+  <span>Saved.</span>
+  <p>Return to your terminal to continue.</p>
+</div>
+
+<script>
+var SERVER_PORT  = SERVER_PORT_PLACEHOLDER;
+var CONFIG       = MOMENTS_DATA_PLACEHOLDER;
+var SESSION_ID   = CONFIG.session_id;
+var SOURCE_VIDEO = CONFIG.source_video;
+var moments      = CONFIG.moments;
+
+// Sort by score descending — must happen before decisions is built so positional idx is consistent
+moments.sort(function(a, b) { return b.score - a.score; });
+
+var decisions = moments.map(function(m) {
+  return { id: m.id, action: 'keep', start: m.start, end: m.end,
+           original_start: m.start, original_end: m.end, comment: '' };
+});
+
+function fmt(s) {
+  var h  = Math.floor(s / 3600);
+  var m  = Math.floor((s % 3600) / 60);
+  var sc = Math.floor(s % 60);
+  return pad(h) + ':' + pad(m) + ':' + pad(sc);
+}
+function pad(n) { return n < 10 ? '0' + n : String(n); }
+
+function updateTally() {
+  var kept      = decisions.filter(function(d) { return d.action === 'keep'; }).length;
+  var removed   = decisions.filter(function(d) { return d.action === 'remove'; }).length;
+  var commented = decisions.filter(function(d) { return d.comment.trim(); }).length;
+  document.getElementById('tally').textContent =
+    kept + ' kept \u00b7 ' + removed + ' removed \u00b7 ' + commented + ' with comments';
+}
+
+function setDecision(idx, action) {
+  decisions[idx].action = action;
+  var card      = document.getElementById('card-' + idx);
+  var isStrong  = moments[idx].score > 70;
+  var cls = 'card';
+  if (!isStrong)        cls += ' maybe';
+  if (action === 'remove') cls += ' removed';
+  card.className = cls;
+  card.querySelector('.btn-keep').classList.toggle('active', action === 'keep');
+  card.querySelector('.btn-remove').classList.toggle('active', action === 'remove');
+  updateTally();
+}
+
+function setStart(idx) {
+  var video = document.getElementById('video-' + idx);
+  var m     = moments[idx];
+  var abs   = m.start + video.currentTime;
+  abs = Math.max(m.context_start, Math.min(m.context_end, abs));
+  decisions[idx].start = abs;
+  document.getElementById('trim-label-' + idx).textContent =
+    fmt(abs) + ' \u2192 ' + fmt(decisions[idx].end);
+}
+
+function setEnd(idx) {
+  var video = document.getElementById('video-' + idx);
+  var m     = moments[idx];
+  var abs   = m.start + video.currentTime;
+  abs = Math.max(m.context_start, Math.min(m.context_end, abs));
+  decisions[idx].end = abs;
+  document.getElementById('trim-label-' + idx).textContent =
+    fmt(decisions[idx].start) + ' \u2192 ' + fmt(abs);
+}
+
+function buildCards() {
+  var sourceName = (SOURCE_VIDEO || '').split(/[\/\\]/).pop();
+  document.getElementById('source-name').textContent = sourceName || 'Unknown source';
+  var strong = moments.filter(function(m) { return m.score > 70; }).length;
+  var maybe  = moments.length - strong;
+  document.getElementById('tier-summary').textContent =
+    moments.length + ' clips \u00b7 ' + strong + ' strong \u00b7 ' + maybe + ' maybe';
+
+  var container = document.getElementById('cards');
+
+  moments.forEach(function(m, idx) {
+    var isStrong = m.score > 70;
+    var dur = (m.end - m.start).toFixed(1);
+
+    /* Card */
+    var card = document.createElement('div');
+    card.id        = 'card-' + idx;
+    card.className = 'card' + (!isStrong ? ' maybe' : '');
+
+    /* Header row */
+    var hdr = document.createElement('div');
+    hdr.className = 'card-header';
+
+    var clipNum = document.createElement('span');
+    clipNum.className   = 'clip-num';
+    clipNum.textContent = '#' + (idx + 1);
+
+    var badge = document.createElement('span');
+    badge.className   = 'badge ' + (isStrong ? 'strong' : 'maybe');
+    badge.textContent = isStrong ? 'STRONG' : 'MAYBE';
+
+    var score = document.createElement('span');
+    score.className   = 'score';
+    score.textContent = String(m.score);
+
+    var ts = document.createElement('span');
+    ts.className   = 'timestamps';
+    ts.textContent = fmt(m.start) + ' \u2192 ' + fmt(m.end) + '   ' + dur + 's';
+
+    hdr.appendChild(clipNum);
+    hdr.appendChild(badge);
+    hdr.appendChild(score);
+    hdr.appendChild(ts);
+
+    /* Video */
+    var video = document.createElement('video');
+    video.id      = 'video-' + idx;
+    video.controls = true;
+    video.preload  = 'metadata';
+    var vsrc = document.createElement('source');
+    vsrc.src  = 'preview_' + m.id + '.mp4';
+    vsrc.type = 'video/mp4';
+    video.appendChild(vsrc);
+
+    /* Trim row */
+    var trimRow = document.createElement('div');
+    trimRow.className = 'trim-row';
+
+    var btnStart = document.createElement('button');
+    btnStart.className   = 'trim-btn';
+    btnStart.textContent = '\u2702 Set Start Here';
+    btnStart.setAttribute('data-idx', idx);
+    btnStart.onclick = function() { setStart(parseInt(this.getAttribute('data-idx'), 10)); };
+
+    var trimLabel = document.createElement('span');
+    trimLabel.className   = 'trim-label';
+    trimLabel.id          = 'trim-label-' + idx;
+    trimLabel.textContent = fmt(m.start) + ' \u2192 ' + fmt(m.end);
+
+    var btnEnd = document.createElement('button');
+    btnEnd.className   = 'trim-btn';
+    btnEnd.textContent = 'Set End Here \u2702';
+    btnEnd.setAttribute('data-idx', idx);
+    btnEnd.onclick = function() { setEnd(parseInt(this.getAttribute('data-idx'), 10)); };
+
+    trimRow.appendChild(btnStart);
+    trimRow.appendChild(trimLabel);
+    trimRow.appendChild(btnEnd);
+
+    /* Decision row */
+    var decRow = document.createElement('div');
+    decRow.className = 'decision-row';
+
+    var btnKeep = document.createElement('button');
+    btnKeep.className   = 'btn-keep active';
+    btnKeep.textContent = '\u2713 Keep';
+    btnKeep.setAttribute('data-idx', idx);
+    btnKeep.onclick = function() { setDecision(parseInt(this.getAttribute('data-idx'), 10), 'keep'); };
+
+    var btnRemove = document.createElement('button');
+    btnRemove.className   = 'btn-remove';
+    btnRemove.textContent = '\u2717 Remove';
+    btnRemove.setAttribute('data-idx', idx);
+    btnRemove.onclick = function() { setDecision(parseInt(this.getAttribute('data-idx'), 10), 'remove'); };
+
+    decRow.appendChild(btnKeep);
+    decRow.appendChild(btnRemove);
+
+    /* Comment row */
+    var commentRow = document.createElement('div');
+    commentRow.className = 'comment-row';
+
+    var input = document.createElement('input');
+    input.type        = 'text';
+    input.placeholder = 'Note for export agent...';
+    input.setAttribute('data-idx', idx);
+    input.addEventListener('input', function() {
+      decisions[parseInt(this.getAttribute('data-idx'), 10)].comment = this.value;
+      updateTally();
+    });
+    commentRow.appendChild(input);
+
+    card.appendChild(hdr);
+    card.appendChild(video);
+    card.appendChild(trimRow);
+    card.appendChild(decRow);
+    card.appendChild(commentRow);
+    container.appendChild(card);
+  });
+}
+
+function approveAll() {
+  moments.forEach(function(_, idx) { setDecision(idx, 'keep'); });
+  saveAndClose();
+}
+
+function saveAndClose() {
+  var boundaryAdjusted = decisions.filter(function(d) {
+    return d.start !== d.original_start || d.end !== d.original_end;
+  }).length;
+  var payload = {
+    version: 1,
+    session_id: SESSION_ID,
+    source_video: SOURCE_VIDEO,
+    boundary_adjusted: boundaryAdjusted,
+    moments: decisions
+  };
+  fetch('http://localhost:' + SERVER_PORT + '/save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload, null, 2)
+  }).then(function(r) {
+    if (!r.ok) throw new Error('Server returned ' + r.status);
+    var s = document.getElementById('saved-screen');
+    s.style.display = 'flex';
+    document.getElementById('footer').style.display = 'none';
+  }).catch(function(err) {
+    alert('Failed to save. Make sure the terminal is still running.\n\n' + err.message);
+  });
+}
+
+buildCards();
+updateTally();
+</script>
+</body>
+</html>
