@@ -2,7 +2,7 @@
 name: dashboard-builder
 description: |
   Use this agent to build an HTML clip dashboard for curating gameplay moments.
-  Extracts audio previews, generates an interactive dashboard, and polls for user decisions.
+  Extracts per-clip 300p video previews, loads a pre-built dashboard template, and polls for user decisions.
 model: sonnet
 ---
 
@@ -58,90 +58,44 @@ Where `context_duration = moment.context_end - moment.context_start`.
 
 Report progress after each clip: `"Extracting extended audio N/M..."`
 
-## Step 2: Generate Dashboard HTML
+## Step 2: Inject Data Into Dashboard Template
 
-Generate a single self-contained HTML file at `<tmp_dir>/dashboard.html`. The file must include all CSS and JS inline (no external dependencies). Audio files are referenced by relative path.
+Read `templates/dashboard.html` from this plugin's `templates/` folder.
 
-**The HTML must implement the following UI:**
+Resolve the template path relative to this agent file:
 
-### Header
-- Source filename and total moment count
-- Tier breakdown: "N strong, M maybe"
-- "Approve All" button (marks all as kept, writes decisions.json immediately)
+    import os, json
+    plugin_root   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    template_path = os.path.join(plugin_root, 'templates', 'dashboard.html')
 
-### Clip Cards (one per moment, ordered by score descending)
+If the file does not exist, abort immediately:
 
-Each card contains:
-- **Clip number** (#1, #2, ...), **confidence badge** (STRONG in green / MAYBE in amber), **score** (0-100), **timestamps** (HH:MM:SS -> HH:MM:SS), **duration**
-- **Description**: the `summary` field (Full Tier) or `audio_description` (Minimal Tier)
-- **Audio player**: HTML5 `<audio>` element with controls, source = `preview_<id>.mp3`
-- **"Hear More" buttons**: Two buttons, "Hear Before (+10s)" and "Hear After (+10s)". Clicking swaps the audio source to `preview_ext_<id>.mp3` and seeks to the appropriate position. Clicking again restores the core preview.
-- **Transcript excerpt**: if available, shown in a collapsible section with speaker labels
-- **Keep/Remove toggle**: Two styled buttons. Default state:
-  - Strong clips (score > 70): "Keep" selected (green highlight)
-  - Maybe clips (score <= 70): "Keep" selected but card has dimmed background
-- **Boundary adjustment**: Four buttons: `-5s start`, `+5s start`, `-5s end`, `+5s end`. Each click updates the displayed timestamps. The adjusted start/end values are stored in JS state. Adjusted timestamps cannot go beyond the context zone boundaries.
-- **Comment field**: A text input with placeholder "Optional: instructions for the agent..."
+    Dashboard template not found at <template_path>. Re-install the gameplay-editor plugin.
 
-### Visual Styling
-- Dark theme (matches typical gaming/editing aesthetic)
-- Cards separated by horizontal rules
-- Strong clips: full opacity, slight green left-border
-- Maybe clips: 70% opacity, amber left-border
-- Removed clips: 30% opacity, red left-border, card collapsed
-- Responsive layout — works at any width
+Do NOT fall back to generating HTML.
 
-### Footer
-- Running summary: "X kept, Y removed, Z with comments"
-- **"Save & Close"** button — prominent, centered
+Copy to the temp directory, then inject the config object:
 
-### JavaScript Behavior
+    import shutil
+    html_path = os.path.join(tmp_dir, 'dashboard.html')
+    shutil.copy(template_path, html_path)
 
-**State management:**
-```javascript
-// Each moment tracked in an array
-const decisions = moments.map(m => ({
-  id: m.id,
-  action: 'keep',  // or 'remove'
-  start: m.start,
-  end: m.end,
-  original_start: m.start,
-  original_end: m.end,
-  comment: ''
-}));
-```
+    config = {
+        "session_id":   session_id,
+        "source_video": source_video,
+        "moments":      moments_list   # full list from moment-detector
+    }
 
-**Keep/Remove toggle:** Clicking toggles `action` between `'keep'` and `'remove'`. Updates card opacity and summary counts.
+    with open(html_path, 'r', encoding='utf-8') as f:
+        html = f.read()
 
-**Boundary buttons:** Each click adjusts `start` or `end` by 5s. Clamps to `[context_start, context_end]`. Updates displayed timestamps.
+    html = html.replace('MOMENTS_DATA_PLACEHOLDER', json.dumps(config, ensure_ascii=False))
+    # SERVER_PORT_PLACEHOLDER is replaced in Step 3 after the port is known
 
-**Comment field:** `oninput` handler saves text to the decision's `comment` field.
+    with open(html_path, 'w', encoding='utf-8') as f:
+        f.write(html)
 
-**Save & Close button:**
-```javascript
-function saveAndClose() {
-  const output = {
-    version: 1,
-    session_id: SESSION_ID,
-    source_video: SOURCE_VIDEO,
-    moments: decisions
-  };
-  fetch('http://localhost:' + SERVER_PORT + '/save', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(output, null, 2)
-  }).then(() => {
-    document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;background:#1a1a2e;color:#eee;font-size:24px;font-family:sans-serif"><div style="text-align:center"><h1>Saved!</h1><p>Return to your terminal to continue.</p></div></div>';
-  }).catch(err => {
-    alert('Failed to save. Make sure the terminal is still running. Error: ' + err.message);
-  });
-}
-```
-
-**Dashboard-to-agent communication:** The dashboard communicates with a lightweight Python HTTP server started by the agent (see Step 3). The server accepts POST to `/save` and writes `decisions.json` to the temp directory. This avoids the fragile "download and manually move file" pattern — saving is a single click with no user intervention.
-
-**Approve All button:**
-Sets all decisions to `action: 'keep'`, then calls `saveAndClose()`.
+**Minimum required fields per moment in `moments_list`:** `id`, `score`, `start`, `end`, `context_start`, `context_end`. All are present in the moment-detector output.
 
 ## Step 3: Start Local Server and Open Dashboard
 
