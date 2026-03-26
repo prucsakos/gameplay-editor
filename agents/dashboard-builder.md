@@ -159,10 +159,11 @@ with socketserver.TCPServer(("127.0.0.1", 0), Handler) as httpd:
     if saved.wait(timeout=1800):
         with open(decisions_path, encoding='utf-8') as f:
             data = json.load(f)
-        kept = sum(1 for m in data['moments'] if m['action'] == 'keep')
-        removed = sum(1 for m in data['moments'] if m['action'] == 'remove')
-        commented = sum(1 for m in data['moments'] if m.get('comment', ''))
-        print(f"Decisions loaded: {kept} kept, {removed} removed, {commented} with comments")
+        kept             = sum(1 for m in data['moments'] if m['action'] == 'keep')
+        removed          = sum(1 for m in data['moments'] if m['action'] == 'remove')
+        commented        = sum(1 for m in data['moments'] if m.get('comment', ''))
+        boundary_adjusted = data.get('boundary_adjusted', 0)
+        print(f"Decisions loaded: {kept} kept, {removed} removed, {commented} with comments, {boundary_adjusted} boundaries adjusted")
     else:
         print("TIMEOUT: Dashboard timed out after 30 minutes.")
 
